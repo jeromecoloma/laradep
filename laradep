@@ -5,14 +5,14 @@
 # Version: 1.0.0
 
 LARADEP_VERSION="1.0.0"
-LARADEP_REPO_USER="${LARADEP_REPO_USER:jeromecoloma}"  # Can be overridden via environment variable
+LARADEP_REPO_USER="jeromecoloma"
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Load color definitions
 if [ -f "$HOME/bin/scriptscolors" ]; then
-    source "$HOME/bin/scriptscolors"
+    . "$HOME/bin/scriptscolors"
 else
     # Fallback color definitions
     C1='\033[0;36m'  # Cyan
@@ -55,6 +55,11 @@ CONFIG_DIR="$(detect_config_directory)"
 # SHARED FUNCTIONS
 # =============================================================================
 
+# Check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
 show_version() {
   echo "🚀 Laravel Deployment Tool (laradep)"
   echo "Version: $LARADEP_VERSION"
@@ -64,6 +69,82 @@ show_version() {
   echo ""
   echo "Usage: laradep --help"
   echo "Update: laradep --update"
+}
+
+cmd_update() {
+  echo "🔄 Checking for laradep updates..."
+  echo ""
+  
+  # Check if curl or wget is available
+  if ! command_exists "curl" && ! command_exists "wget"; then
+    echo "❌ Neither curl nor wget found. Cannot check for updates."
+    return 1
+  fi
+  
+  # Check if repo user is configured
+  if [ "$LARADEP_REPO_USER" = "YOUR_USERNAME" ]; then
+    echo "❌ GitHub repository not configured."
+    echo "ℹ️  Please set LARADEP_REPO_USER environment variable or update the script."
+    echo "ℹ️  Example: export LARADEP_REPO_USER=yourusername"
+    return 1
+  fi
+  
+  # Get latest version from GitHub
+  local latest_version=""
+  local github_url="https://raw.githubusercontent.com/$LARADEP_REPO_USER/laradep/main/laradep"
+  
+  if command_exists "curl"; then
+    latest_version=$(curl -fsSL "$github_url" | grep 'LARADEP_VERSION=' | head -1 | cut -d'"' -f2 2>/dev/null || echo "")
+  elif command_exists "wget"; then
+    latest_version=$(wget -qO- "$github_url" | grep 'LARADEP_VERSION=' | head -1 | cut -d'"' -f2 2>/dev/null || echo "")
+  fi
+  
+  if [ -z "$latest_version" ]; then
+    echo "❌ Could not fetch latest version information"
+    echo "ℹ️  Check your internet connection and repository URL"
+    echo "ℹ️  Repository: https://github.com/$LARADEP_REPO_USER/laradep"
+    return 1
+  fi
+  
+  echo "Current version: v$LARADEP_VERSION"
+  echo "Latest version:  v$latest_version"
+  echo ""
+  
+  if [ "$LARADEP_VERSION" = "$latest_version" ]; then
+    echo "✅ You are already running the latest version!"
+    return 0
+  fi
+  
+  echo "🆕 A new version is available!"
+  echo ""
+  read -p "Do you want to update to v$latest_version? (y/N): " -n 1 -r
+  echo ""
+  
+  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "❌ Update cancelled"
+    return 0
+  fi
+  
+  echo ""
+  echo "📥 Downloading and installing latest version..."
+  
+  # Download and run installer
+  local installer_url="https://raw.githubusercontent.com/$LARADEP_REPO_USER/laradep/main/install.sh"
+  
+  if command_exists "curl"; then
+    LARADEP_REPO_USER="$LARADEP_REPO_USER" curl -fsSL "$installer_url" | bash -s -- --force
+  elif command_exists "wget"; then
+    LARADEP_REPO_USER="$LARADEP_REPO_USER" wget -qO- "$installer_url" | bash -s -- --force
+  fi
+  
+  if [ $? -eq 0 ]; then
+    echo ""
+    echo "✅ Update completed successfully!"
+    echo "🔄 Please restart your shell or run: source ~/.zshrc"
+  else
+    echo "❌ Update failed. Please try manual installation."
+    return 1
+  fi
 }
 
 cmd_update() {
@@ -1566,3 +1647,4 @@ case $FUNCTION_COMMAND in
     exit 1
     ;;
 esac
+
