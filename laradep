@@ -29,6 +29,17 @@ fi
 
 detect_config_directory() {
     # Try to find deployment configs in common locations
+    # Priority 1: Git root directory (if we're in a git repository)
+    local git_root=""
+    if git rev-parse --git-dir > /dev/null 2>&1; then
+        git_root="$(git rev-parse --show-toplevel)"
+        if [ -d "$git_root/_scripts" ] && ([ -f "$git_root/_scripts/rsync.cfg" ] || [ -f "$git_root/_scripts/rsync-staging.cfg" ]); then
+            echo "$git_root/_scripts"
+            return 0
+        fi
+    fi
+    
+    # Priority 2: Other common locations
     local possible_dirs=(
         "$(pwd)/_scripts"
         "$(pwd)/scripts" 
@@ -45,7 +56,7 @@ detect_config_directory() {
         fi
     done
     
-    # If no config found, use current directory
+    # Fallback: current directory
     echo "$(pwd)"
 }
 
