@@ -325,7 +325,14 @@ main() {
     
     check_prerequisites
     create_directories
-    check_existing_installation
+
+    # Handle existing installation check properly
+    if check_existing_installation; then
+        print_status "Proceeding with installation/update..."
+    else
+        print_status "Proceeding with fresh installation..."
+    fi
+
     install_laradep
     install_completion
     
