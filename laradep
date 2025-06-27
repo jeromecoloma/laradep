@@ -27,6 +27,11 @@ fi
 # CONFIGURATION DETECTION
 # =============================================================================
 
+# Check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
 detect_config_directory() {
     # Try to find deployment configs in common locations
     # Priority 1: Git root directory (if we're in a git repository)
@@ -65,11 +70,6 @@ CONFIG_DIR="$(detect_config_directory)"
 # =============================================================================
 # SHARED FUNCTIONS
 # =============================================================================
-
-# Check if command exists
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
 
 show_version() {
   echo "🚀 Laravel Deployment Tool (laradep)"
@@ -412,7 +412,19 @@ load_config() {
   fi
 
   source "$CONFIG_FILE"
+  
+  # Set defaults for SSH connection
+  RSYNC_SSH_KEY="${RSYNC_SSH_KEY:-$HOME/.ssh/id_rsa}"
+  
+  # Handle port variable alternatives (RSYNC_SSH_PORT takes precedence over RSYNC_PORT)
+  if [ -n "$RSYNC_SSH_PORT" ]; then
+    RSYNC_PORT="$RSYNC_SSH_PORT"
+  fi
+  RSYNC_PORT="${RSYNC_PORT:-22}"
+  
+  # Clean up destination path
   RSYNC_UPLOAD_DEST="${RSYNC_UPLOAD_DEST%/}"
+  
   return 0
 }
 
@@ -1658,4 +1670,3 @@ case $FUNCTION_COMMAND in
     exit 1
     ;;
 esac
-
