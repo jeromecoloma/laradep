@@ -1,0 +1,19 @@
+# Staging deployment configuration for laradep
+
+# Server connection settings
+RSYNC_USER="deploy"
+RSYNC_HOST="staging.your-domain.com"
+RSYNC_PORT="22"
+RSYNC_SSH_KEY="$HOME/.ssh/id_rsa"
+
+# Deployment paths
+RSYNC_UPLOAD_SRC="./www/"
+RSYNC_UPLOAD_DEST="/var/www/staging"
+
+# Cloudflare cache purging (optional - usually disabled for staging)
+RSYNC_CLOUDFLARE_ENABLE="false"
+RSYNC_CLOUDFLARE_ZONE_ID=""
+RSYNC_CLOUDFLARE_HOST=""
+
+# Post-deployment commands for staging
+RSYNC_AFTER_SCRIPT="php artisan migrate --force && php artisan config:cache"

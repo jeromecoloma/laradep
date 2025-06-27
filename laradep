@@ -1,0 +1,1568 @@
+#!/bin/bash
+
+# Laravel Deployment Tool (laradep)
+# A comprehensive deployment script for Laravel applications
+# Version: 1.0.0
+
+LARADEP_VERSION="1.0.0"
+LARADEP_REPO_USER="${LARADEP_REPO_USER:jeromecoloma}"  # Can be overridden via environment variable
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load color definitions
+if [ -f "$HOME/bin/scriptscolors" ]; then
+    source "$HOME/bin/scriptscolors"
+else
+    # Fallback color definitions
+    C1='\033[0;36m'  # Cyan
+    C2='\033[0;32m'  # Green  
+    C3='\033[0;33m'  # Yellow
+    C4='\033[0;31m'  # Red
+    C5='\033[0;35m'  # Magenta
+    CE='\033[0m'     # Reset
+fi
+
+# =============================================================================
+# CONFIGURATION DETECTION
+# =============================================================================
+
+detect_config_directory() {
+    # Try to find deployment configs in common locations
+    local possible_dirs=(
+        "$(pwd)/_scripts"
+        "$(pwd)/scripts" 
+        "$(pwd)/.deploy"
+        "$HOME/.deploy"
+        "$SCRIPT_DIR/../configs"
+        "$SCRIPT_DIR/configs"
+    )
+    
+    for dir in "${possible_dirs[@]}"; do
+        if [ -d "$dir" ] && ([ -f "$dir/rsync.cfg" ] || [ -f "$dir/rsync-staging.cfg" ]); then
+            echo "$dir"
+            return 0
+        fi
+    done
+    
+    # If no config found, use current directory
+    echo "$(pwd)"
+}
+
+CONFIG_DIR="$(detect_config_directory)"
+
+# =============================================================================
+# SHARED FUNCTIONS
+# =============================================================================
+
+show_version() {
+  echo "🚀 Laravel Deployment Tool (laradep)"
+  echo "Version: $LARADEP_VERSION"
+  echo ""
+  echo "A comprehensive deployment script for Laravel applications"
+  echo "Features: Upload, Rollback, Maintenance Mode, Slack Notifications, Cloudflare Cache Purging"
+  echo ""
+  echo "Usage: laradep --help"
+  echo "Update: laradep --update"
+}
+
+cmd_update() {
+  echo "🔄 Checking for laradep updates..."
+  echo ""
+  
+  # Check if curl or wget is available
+  if ! command_exists "curl" && ! command_exists "wget"; then
+    echo "❌ Neither curl nor wget found. Cannot check for updates."
+    return 1
+  fi
+  
+  # Check if repo user is configured
+  if [ "$LARADEP_REPO_USER" = "YOUR_USERNAME" ]; then
+    echo "❌ GitHub repository not configured."
+    echo "ℹ️  Please set LARADEP_REPO_USER environment variable or update the script."
+    echo "ℹ️  Example: export LARADEP_REPO_USER=yourusername"
+    return 1
+  fi
+  
+  # Get latest version from GitHub
+  local latest_version=""
+  local github_url="https://raw.githubusercontent.com/$LARADEP_REPO_USER/laradep/main/laradep"
+  
+  if command_exists "curl"; then
+    latest_version=$(curl -fsSL "$github_url" | grep 'LARADEP_VERSION=' | head -1 | cut -d'"' -f2 2>/dev/null || echo "")
+  elif command_exists "wget"; then
+    latest_version=$(wget -qO- "$github_url" | grep 'LARADEP_VERSION=' | head -1 | cut -d'"' -f2 2>/dev/null || echo "")
+  fi
+  
+  if [ -z "$latest_version" ]; then
+    echo "❌ Could not fetch latest version information"
+    echo "ℹ️  Check your internet connection and repository URL"
+    echo "ℹ️  Repository: https://github.com/$LARADEP_REPO_USER/laradep"
+    return 1
+  fi
+  
+  echo "Current version: v$LARADEP_VERSION"
+  echo "Latest version:  v$latest_version"
+  echo ""
+  
+  if [ "$LARADEP_VERSION" = "$latest_version" ]; then
+    echo "✅ You are already running the latest version!"
+    return 0
+  fi
+  
+  echo "🆕 A new version is available!"
+  echo ""
+  read -p "Do you want to update to v$latest_version? (y/N): " -n 1 -r
+  echo ""
+  
+  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "❌ Update cancelled"
+    return 0
+  fi
+  
+  echo ""
+  echo "📥 Downloading and installing latest version..."
+  
+  # Download and run installer
+  local installer_url="https://raw.githubusercontent.com/$LARADEP_REPO_USER/laradep/main/install.sh"
+  
+  if command_exists "curl"; then
+    LARADEP_REPO_USER="$LARADEP_REPO_USER" curl -fsSL "$installer_url" | bash -s -- --force
+  elif command_exists "wget"; then
+    LARADEP_REPO_USER="$LARADEP_REPO_USER" wget -qO- "$installer_url" | bash -s -- --force
+  fi
+  
+  if [ $? -eq 0 ]; then
+    echo ""
+    echo "✅ Update completed successfully!"
+    echo "🔄 Please restart your shell or run: source ~/.zshrc"
+  else
+    echo "❌ Update failed. Please try manual installation."
+    return 1
+  fi
+}
+
+show_help() {
+  echo "🚀 Laravel Deployment Tool (laradep) v$LARADEP_VERSION"
+  echo ""
+  echo "📖 Usage:"
+  echo "  laradep setup --env=staging|production"
+  echo "  laradep upload --env=staging|production [--live] [--release=TIMESTAMP]"
+  echo "  laradep rollback --env=staging|production --release=TIMESTAMP"
+  echo "  laradep connect --env=staging|production"
+  echo "  laradep releases --env=staging|production"
+  echo "  laradep remove --env=staging|production [--release=TIMESTAMP] [--force]"
+  echo "  laradep down --env=staging|production [--message='Custom message']"
+  echo "  laradep up --env=staging|production [--message='Custom message']"
+  echo "  laradep purge --env=staging|production"
+  echo "  laradep notify --env=staging|production [OPTIONS]"
+  echo "  laradep --version"
+  echo "  laradep --update"
+  echo "  laradep --help"
+  echo ""
+  echo "🛠 Commands:"
+  echo "  setup       Prepares the remote environment by creating necessary directories."
+  echo "  upload      Syncs Laravel files to remote server and switches release symlink."
+  echo "  rollback    Switches the current symlink to a specific release."
+  echo "  connect     SSH into the remote server at the environment's root path."
+  echo "  releases    List available releases on the remote server."
+  echo "  remove      Interactively delete old releases (protects current release)."
+  echo "  down        Put Laravel application into maintenance mode (php artisan down)."
+  echo "  up          Bring Laravel application out of maintenance mode (php artisan up)."
+  echo "  purge       Clear Cloudflare cache for the environment."
+  echo "  notify      Send deployment notification to Slack channel."
+  echo ""
+  echo "📱 Slack Options (use with notify or auto-sent after upload):"
+  echo "  --message=TYPE        Use predefined message (deploy|rollback|maintenance|hotfix|release|alert)"
+  echo "  --custom='MESSAGE'    Send custom message (supports variables: {env}, {release}, {timestamp}, {user}, {host})"
+  echo "  --emoji=TYPE          Override emoji (deploy|rollback|warning|success|error|info|rocket|bell)"
+  echo "  --channel=#CHANNEL    Override target channel"
+  echo "  --slack-help          Show detailed Slack options help"
+  echo ""
+  echo "🗑️  Remove Release Options:"
+  echo "  --release=TIMESTAMP   Delete specific release (must not be current)"
+  echo "  --force               Skip confirmation prompt"
+  echo ""
+  echo "🔧 Maintenance Mode Options:"
+  echo "  --message='MESSAGE'   Custom maintenance message (optional)"
+  echo ""
+  echo "📝 Examples:"
+  echo "  laradep upload --env=production --live"
+  echo "  laradep down --env=production --message='Scheduled maintenance for 30 minutes'"
+  echo "  laradep up --env=production --message='Maintenance completed, site is back online'"
+  echo "  laradep down --env=staging (uses default message)"
+  echo "  laradep remove --env=staging (interactive selection)"
+  echo "  laradep remove --env=production --release=202501150830"
+  echo "  laradep remove --env=staging --release=202501150830 --force"
+  echo "  laradep notify --env=staging --message=maintenance"
+  echo "  laradep notify --env=production --custom='Hot fix deployed for issue #123'"
+  echo "  laradep rollback --env=production --release=202501150830 --message=rollback"
+  echo ""
+  echo "📁 Config Directory: $CONFIG_DIR"
+}
+
+show_usage() {
+  echo "🚀 Laravel Deployment Tool (laradep) v$LARADEP_VERSION"
+  echo ""
+  echo "❌ Unknown or unrecognized command."
+  echo ""
+  echo "📖 Usage:"
+  echo "  laradep setup --env=staging|production"
+  echo "  laradep upload --env=staging|production [--live] [--release=TIMESTAMP]"
+  echo "  laradep rollback --env=staging|production --release=TIMESTAMP"
+  echo "  laradep connect --env=staging|production"
+  echo "  laradep releases --env=staging|production"
+  echo "  laradep remove --env=staging|production [--release=TIMESTAMP] [--force]"
+  echo "  laradep down --env=staging|production [--message='Custom message']"
+  echo "  laradep up --env=staging|production [--message='Custom message']"
+  echo "  laradep purge --env=staging|production"
+  echo "  laradep notify --env=staging|production [OPTIONS]"
+  echo "  laradep --version"
+  echo "  laradep --update"
+  echo "  laradep --help"
+  echo ""
+  echo "🛠 Commands:"
+  echo "  setup       Prepares the remote environment by creating necessary directories."
+  echo "  upload      Syncs Laravel files to remote server and switches release symlink."
+  echo "  rollback    Switches the current symlink to a specific release."
+  echo "  connect     SSH into the remote server at the environment's root path."
+  echo "  releases    List available releases on the remote server."
+  echo "  remove      Interactively delete old releases (protects current release)."
+  echo "  down        Put Laravel application into maintenance mode (php artisan down)."
+  echo "  up          Bring Laravel application out of maintenance mode (php artisan up)."
+  echo "  purge       Clear Cloudflare cache for the environment."
+  echo "  notify      Send deployment notification to Slack channel."
+  echo ""
+  echo "📱 Slack Options (use with notify or auto-sent after upload):"
+  echo "  --message=TYPE        Use predefined message (deploy|rollback|maintenance|hotfix|release|alert)"
+  echo "  --custom='MESSAGE'    Send custom message (supports variables: {env}, {release}, {timestamp}, {user}, {host})"
+  echo "  --emoji=TYPE          Override emoji (deploy|rollback|warning|success|error|info|rocket|bell)"
+  echo "  --channel=#CHANNEL    Override target channel"
+  echo "  --slack-help          Show detailed Slack options help"
+  echo ""
+  echo "🗑️  Remove Release Options:"
+  echo "  --release=TIMESTAMP   Delete specific release (must not be current)"
+  echo "  --force               Skip confirmation prompt"
+  echo ""
+  echo "🔧 Maintenance Mode Options:"
+  echo "  --message='MESSAGE'   Custom maintenance message (optional)"
+  echo ""
+  echo "📝 Examples:"
+  echo "  laradep upload --env=production --live"
+  echo "  laradep down --env=production --message='Scheduled maintenance for 30 minutes'"
+  echo "  laradep up --env=production --message='Maintenance completed, site is back online'"
+  echo "  laradep down --env=staging (uses default message)"
+  echo "  laradep remove --env=staging (interactive selection)"
+  echo "  laradep remove --env=production --release=202501150830"
+  echo "  laradep remove --env=staging --release=202501150830 --force"
+  echo "  laradep notify --env=staging --message=maintenance"
+  echo "  laradep notify --env=production --custom='Hot fix deployed for issue #123'"
+  echo "  laradep rollback --env=production --release=202501150830 --message=rollback"
+  echo ""
+  echo "📁 Config Directory: $CONFIG_DIR"
+}
+
+show_slack_usage() {
+  echo "📱 Slack Notification Options:"
+  echo "  --message=custom           Send a custom message"
+  echo "  --message=deploy           'Deployment completed successfully to {env}'"
+  echo "  --message=rollback         'Rolled back to release {release} on {env}'"
+  echo "  --message=maintenance      'System maintenance window started on {env}'"
+  echo "  --message=hotfix           'Emergency hotfix deployed to {env}'"
+  echo "  --message=release          'New release {release} deployed to {env}'"
+  echo "  --message=alert            'Alert: Deployment issue detected on {env}'"
+  echo "  --custom='Your message'    Send a completely custom message"
+  echo ""
+  echo "📝 Message Variables (automatically replaced):"
+  echo "  {env}        - Environment (staging/production)"
+  echo "  {release}    - Release timestamp"
+  echo "  {timestamp}  - Current date/time"
+  echo "  {user}       - Current user"
+  echo "  {host}       - Target hostname"
+  echo ""
+  echo "🎭 Emoji Options:"
+  echo "  --emoji=deploy    🚀 (default for deployments)"
+  echo "  --emoji=rollback  ⏪ (default for rollbacks)"
+  echo "  --emoji=warning   ⚠️"
+  echo "  --emoji=success   ✅"
+  echo "  --emoji=error     ❌"
+  echo "  --emoji=info      ℹ️"
+  echo "  --emoji=rocket    🚀"
+  echo "  --emoji=bell      🔔"
+  echo ""
+  echo "📢 Channel Options:"
+  echo "  --channel=#deployments    Override default channel"
+  echo "  --channel=@username       Send DM to specific user"
+  echo ""
+  echo "📝 Custom Message Examples:"
+  echo "  --custom='Deploy completed by {user} at {timestamp}'"
+  echo "  --custom='Release {release} is now live on {env}!'"
+  echo "  --custom='Emergency hotfix for ticket #123 deployed to {host}'"
+  echo ""
+}
+
+load_config() {
+  local env="$1"
+  
+  if [ -z "$env" ]; then
+    echo "❌ Environment not specified"
+    return 1
+  fi
+  
+  CONFIG_FILE="$CONFIG_DIR/rsync-$env.cfg"
+  [ "$env" == "production" ] && CONFIG_FILE="$CONFIG_DIR/rsync.cfg"
+
+  if [ ! -f "$CONFIG_FILE" ]; then
+    echo "❌ Config file not found for environment '$env': $CONFIG_FILE"
+    echo "ℹ️  Expected config directory: $CONFIG_DIR"
+    echo "ℹ️  Looking for: rsync-$env.cfg $([ "$env" == "production" ] && echo "or rsync.cfg")"
+    return 1
+  fi
+
+  source "$CONFIG_FILE"
+  RSYNC_UPLOAD_DEST="${RSYNC_UPLOAD_DEST%/}"
+  return 0
+}
+
+# =============================================================================
+# ENHANCED SLACK FUNCTIONS
+# =============================================================================
+
+get_predefined_message() {
+  local message_type="$1"
+  local env="$2"
+  local release="$3"
+  
+  case "$message_type" in
+    deploy)
+      echo "🚀 Deployment completed successfully to *${env}* environment"
+      ;;
+    rollback)
+      echo "⏪ Rolled back to release \`${release}\` on *${env}* environment"
+      ;;
+    maintenance)
+      echo "🔧 System maintenance window started on *${env}* environment"
+      ;;
+    maintenance-down)
+      echo "🔧 *${env}* environment is now in maintenance mode"
+      ;;
+    maintenance-up)
+      echo "✅ *${env}* environment is back online - maintenance completed"
+      ;;
+    hotfix)
+      echo "🆘 Emergency hotfix deployed to *${env}* environment"
+      ;;
+    release)
+      echo "📦 New release \`${release}\` deployed to *${env}* environment"
+      ;;
+    alert)
+      echo "🚨 Alert: Deployment issue detected on *${env}* environment"
+      ;;
+    setup)
+      echo "⚙️ Initial setup completed for *${env}* environment"
+      ;;
+    purge)
+      echo "♻️ Cloudflare cache purged for *${env}* environment"
+      ;;
+    *)
+      echo "📋 Deployment notification for *${env}* environment"
+      ;;
+  esac
+}
+
+get_predefined_emoji() {
+  local message_type="$1"
+  
+  case "$message_type" in
+    deploy|release)
+      echo "rocket"
+      ;;
+    rollback)
+      echo "rewind"
+      ;;
+    maintenance|setup)
+      echo "wrench"
+      ;;
+    maintenance-down)
+      echo "construction"
+      ;;
+    maintenance-up)
+      echo "white_check_mark"
+      ;;
+    hotfix|alert)
+      echo "rotating_light"
+      ;;
+    purge)
+      echo "recycle"
+      ;;
+    error)
+      echo "x"
+      ;;
+    warning)
+      echo "warning"
+      ;;
+    success)
+      echo "white_check_mark"
+      ;;
+    info)
+      echo "information_source"
+      ;;
+    bell)
+      echo "bell"
+      ;;
+    *)
+      echo "speech_balloon"
+      ;;
+  esac
+}
+
+substitute_message_variables() {
+  local message="$1"
+  local env="$2"
+  local release="$3"
+  local user="$(whoami)"
+  local timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+  local host="$RSYNC_HOST"
+  
+  # Replace variables in the message
+  message="${message//\{env\}/$env}"
+  message="${message//\{release\}/$release}"
+  message="${message//\{timestamp\}/$timestamp}"
+  message="${message//\{user\}/$user}"
+  message="${message//\{host\}/$host}"
+  
+  echo "$message"
+}
+
+# =============================================================================
+# COMMAND FUNCTIONS
+# =============================================================================
+
+cmd_setup() {
+  local env="$1"
+  
+  echo ""
+  echo -e "${C4}⚠️  SETUP COMMAND WARNING${CE}"
+  echo -e "${C4}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${CE}"
+  echo -e "${C4}▶ The 'setup' command is designed for INITIAL server preparation only.${CE}"
+  echo -e "${C4}▶ Running setup on an existing deployment can cause issues or overwrite configurations.${CE}"
+  echo -e "${C4}▶ This command will create/modify server directories and symlinks.${CE}"
+  echo ""
+  echo -e "${C2}ℹ️  What this setup will do:${CE}"
+  echo -e "${C2}   • Create shared storage directories${CE}"
+  echo -e "${C2}   • Set up Laravel framework cache/session/view folders${CE}"
+  echo -e "${C2}   • Create releases directory structure${CE}"
+  echo -e "${C2}   • Set appropriate permissions (755)${CE}"
+  echo ""
+  echo -e "${C4}⚡ ONLY proceed if this is a brand new server or you know what you're doing!${CE}"
+  echo -e "${C4}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${CE}"
+  echo ""
+  
+  read -p "Are you absolutely sure you want to run setup for $env environment? (type 'YES' to continue): " confirm
+  
+  if [ "$confirm" != "YES" ]; then
+    echo ""
+    echo -e "${C4}❌ Setup cancelled. Only 'YES' (uppercase) confirms this potentially destructive operation.${CE}"
+    echo ""
+    echo -e "${C2}💡 If you need to:${CE}"
+    echo -e "${C2}   • Upload code: use 'laradep upload --env=$env --live'${CE}"
+    echo -e "${C2}   • Check releases: use 'laradep releases --env=$env'${CE}"
+    echo -e "${C2}   • Connect to server: use 'laradep connect --env=$env'${CE}"
+    return 1
+  fi
+  
+  echo ""
+  echo "🔧 Running initial setup for environment: $env"
+  echo -e "${C3}⚡ Proceeding with server setup...${CE}"
+  echo ""
+  
+  if ! load_config "$env"; then
+    return 1
+  fi
+
+  echo "📂 Creating shared directories on remote:"
+  echo "  - $RSYNC_UPLOAD_DEST/shared/storage (mkdir if missing)"
+  echo "  - $RSYNC_UPLOAD_DEST/shared/storage/.gitkeep (create if missing)"
+  echo "  - $RSYNC_UPLOAD_DEST/shared/storage/README.md (explain purpose)"
+  echo "  - $RSYNC_UPLOAD_DEST/shared/storage/framework/{cache,sessions,views} (create if missing)"
+  echo "  - $RSYNC_UPLOAD_DEST/releases (mkdir if missing)"
+
+  ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash -s <<EOF
+    umask 022
+    mkdir -p "$RSYNC_UPLOAD_DEST/shared/storage" && chmod 755 "$RSYNC_UPLOAD_DEST/shared/storage"
+    mkdir -p "$RSYNC_UPLOAD_DEST/shared/storage/framework/cache" && chmod 755 "$RSYNC_UPLOAD_DEST/shared/storage/framework/cache"
+    mkdir -p "$RSYNC_UPLOAD_DEST/shared/storage/framework/sessions" && chmod 755 "$RSYNC_UPLOAD_DEST/shared/storage/framework/sessions"
+    mkdir -p "$RSYNC_UPLOAD_DEST/shared/storage/framework/views" && chmod 755 "$RSYNC_UPLOAD_DEST/shared/storage/framework/views"
+
+    [ -f "$RSYNC_UPLOAD_DEST/shared/storage/.gitkeep" ] || touch "$RSYNC_UPLOAD_DEST/shared/storage/.gitkeep"
+    [ -f "$RSYNC_UPLOAD_DEST/shared/storage/README.md" ] || cat <<EOT > "$RSYNC_UPLOAD_DEST/shared/storage/README.md"
+# Persistent storage
+This folder is symlinked into release folders and excluded from Git.
+EOT
+    mkdir -p "$RSYNC_UPLOAD_DEST/releases" && chmod 755 "$RSYNC_UPLOAD_DEST/releases"
+EOF
+
+  echo ""
+  echo "✅ Setup complete. You can now run: laradep upload --env=$env --live"
+  echo ""
+  echo -e "${C2}📝 Next steps:${CE}"
+  echo -e "${C2}   1. Run your first deployment: laradep upload --env=$env --live${CE}"
+  echo -e "${C2}   2. Verify deployment: laradep releases --env=$env${CE}"
+  echo -e "${C2}   3. Test your application in the browser${CE}"
+  
+  # Send setup notification if Slack options were provided
+  if [ -n "$SLACK_MESSAGE_TYPE" ] || [ -n "$SLACK_CUSTOM_MESSAGE" ]; then
+    echo ""
+    echo -e "${C1}→${CE} Sending setup notification to Slack..."
+    local setup_message_type="setup"
+    [ -n "$SLACK_MESSAGE_TYPE" ] && setup_message_type="$SLACK_MESSAGE_TYPE"
+    cmd_notify_slack "$env" "$setup_message_type" "$SLACK_CUSTOM_MESSAGE" "$SLACK_EMOJI" "$SLACK_CHANNEL" ""
+  fi
+}
+
+cmd_notify_slack() {
+  local env="$1"
+  local message_type="$2"
+  local custom_message="$3"
+  local emoji_override="$4"
+  local channel_override="$5"
+  local release="$6"
+  
+  # Include Slack config files (check for both new and legacy)
+  local slack_config_loaded=false
+  
+  # Try new slackbootstrap first
+  if [ -f "$HOME/bin/slackbootstrap" ]; then
+    source "$HOME/bin/slackbootstrap"
+    slack_config_loaded=true
+  elif [ -f "$HOME/.slackbootstrap" ]; then
+    source "$HOME/.slackbootstrap"
+    slack_config_loaded=true
+  fi
+  
+  # Try legacy iwdevbootstrap for backward compatibility
+  if [ -f "$HOME/bin/iwdevbootstrap" ]; then
+    source "$HOME/bin/iwdevbootstrap"
+    slack_config_loaded=true
+  fi
+  
+  # Check for slack config file
+  if [ -f "$HOME/.iwslackrc" ]; then
+    source "$HOME/.iwslackrc"
+  elif [ -f "$HOME/.slackrc" ]; then
+    source "$HOME/.slackrc"
+  else
+    echo -e "${C4}❌ Slack config file not found${CE}"
+    echo -e "${C4}   Looking for: $HOME/.slackrc or $HOME/.iwslackrc${CE}"
+    return 1
+  fi
+  
+  if [ "$slack_config_loaded" = false ]; then
+    echo -e "${C4}❌ Slack bootstrap file not found${CE}"
+    echo -e "${C4}   Looking for: $HOME/bin/slackbootstrap, $HOME/.slackbootstrap, or $HOME/bin/iwdevbootstrap${CE}"
+    return 1
+  fi
+
+  # Determine the message to send (prefer new SLACK_ variables, fallback to IWDEV_)
+  local final_message=""
+  if [ -n "$custom_message" ]; then
+    final_message="$custom_message"
+  elif [ -n "$message_type" ]; then
+    final_message="$(get_predefined_message "$message_type" "$env" "$release")"
+  else
+    # Fallback to configured upload message (new format first, then legacy)
+    if [ -n "$SLACK_UPLOAD_MESSAGE" ]; then
+      final_message="$SLACK_UPLOAD_MESSAGE"
+    elif [ -n "$IWDEV_UPLOAD_MESSAGE" ]; then
+      final_message="$IWDEV_UPLOAD_MESSAGE"
+    else
+      final_message="$(get_predefined_message "deploy" "$env" "$release")"
+    fi
+  fi
+  
+  # Substitute variables in the message
+  final_message="$(substitute_message_variables "$final_message" "$env" "$release")"
+  
+  # Determine emoji (prefer new SLACK_ variables, fallback to IWDEV_)
+  local final_emoji="rocket"  # Default fallback
+  if [ -n "$emoji_override" ]; then
+    final_emoji="$emoji_override"
+  elif [ -n "$message_type" ]; then
+    final_emoji="$(get_predefined_emoji "$message_type")"
+  elif [ -n "$SLACK_EMOJI" ]; then
+    final_emoji="$SLACK_EMOJI"
+  elif [ -n "$IWDEV_EMOJI" ]; then
+    final_emoji="$IWDEV_EMOJI"
+  fi
+  
+  # Determine channel (prefer new SLACK_ variables, fallback to IWDEV_)
+  local final_channel=""
+  if [ -n "$channel_override" ]; then
+    final_channel="${channel_override#\#}"  # Remove # if present
+  elif [ -n "$SLACK_CHANNEL" ]; then
+    final_channel="$SLACK_CHANNEL"
+  elif [ -n "$IWDEV_CHANNEL" ]; then
+    final_channel="$IWDEV_CHANNEL"
+  fi
+  
+  # Determine username (prefer new SLACK_ variables, fallback to IWDEV_)
+  local final_username=""
+  if [ -n "$SLACK_USERNAME" ]; then
+    final_username="$SLACK_USERNAME"
+  elif [ -n "$IWDEV_USERNAME" ]; then
+    final_username="$IWDEV_USERNAME"
+  fi
+  
+  # Determine webhook (prefer new SLACK_ variables, fallback to IWDEV_)
+  local final_webhook=""
+  if [ -n "$SLACK_WEBHOOK" ]; then
+    final_webhook="$SLACK_WEBHOOK"
+  elif [ -n "$SLACK_ND_WEBHOOK" ]; then
+    final_webhook="$SLACK_ND_WEBHOOK"
+  elif [ -n "$IWDEV_ND_WEBHOOK" ]; then
+    final_webhook="$IWDEV_ND_WEBHOOK"
+  fi
+  
+  # Check if required variables are set
+  if [ -z "$final_channel" ] || [ -z "$final_username" ] || [ -z "$final_webhook" ]; then
+    echo -e "${C4}❌ Required Slack variables not set. Check your Slack configuration files.${CE}"
+    echo -e "${C4}   Missing variables:${CE}"
+    [ -z "$final_channel" ] && echo -e "${C4}   - Channel: SLACK_CHANNEL or IWDEV_CHANNEL${CE}"
+    [ -z "$final_username" ] && echo -e "${C4}   - Username: SLACK_USERNAME or IWDEV_USERNAME${CE}"
+    [ -z "$final_webhook" ] && echo -e "${C4}   - Webhook: SLACK_WEBHOOK, SLACK_ND_WEBHOOK, or IWDEV_ND_WEBHOOK${CE}"
+    return 1
+  fi
+  
+  echo ""
+  echo -e "${C1}→${CE} Sending Slack notification:"
+  echo -e "  ${C2}Channel:${CE} #$final_channel"
+  echo -e "  ${C2}Username:${CE} $final_username"
+  echo -e "  ${C2}Message:${CE} $final_message"
+  echo -e "  ${C2}Emoji:${CE} :${final_emoji}:"
+  echo ""
+  
+  # Prepare the payload
+  local payload="{
+    \"channel\": \"#$final_channel\",
+    \"username\": \"$final_username\",
+    \"text\": \"$final_message\",
+    \"icon_emoji\": \":${final_emoji}:\"
+  }"
+  
+  # Send the notification
+  local response=$(curl -s -w "\n%{http_code}" -X POST \
+    --data-urlencode "payload=$payload" \
+    "$final_webhook")
+  
+  # Extract HTTP status code and response body
+  local http_code=$(echo "$response" | tail -n1)
+  local response_body=$(echo "$response" | sed '$d')
+  
+  if [ "$http_code" -eq 200 ] && [ "$response_body" = "ok" ]; then
+    echo -e "${C5}✓${CE} Slack notification sent successfully!"
+  else
+    echo -e "${C4}❌ Failed to send Slack notification${CE}"
+    echo -e "${C4}   HTTP Status: $http_code${CE}"
+    echo -e "${C4}   Response: $response_body${CE}"
+    return 1
+  fi
+  
+  echo ""
+  echo -e "${C3}Done.${CE}"
+}
+
+cmd_maintenance_down() {
+  local env="$1"
+  local maintenance_message="$2"
+  
+  if ! load_config "$env"; then
+    return 1
+  fi
+
+  echo "🔧 Putting Laravel application into maintenance mode on $env..."
+  
+  # Simple artisan down command
+  local artisan_cmd="cd $RSYNC_UPLOAD_DEST/current/www && php artisan down"
+  
+  # Show custom message info if provided
+  if [ -n "$maintenance_message" ]; then
+    echo "📝 Message: $maintenance_message (will be sent via Slack)"
+  fi
+  
+  echo "🎯 Target: $RSYNC_USER@$RSYNC_HOST:$RSYNC_UPLOAD_DEST/current/www"
+  echo "⚡ Command: $artisan_cmd"
+  echo ""
+  
+  # Execute the artisan down command
+  local maintenance_result=$(ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash -s <<EOF
+if [ -d "$RSYNC_UPLOAD_DEST/current/www" ]; then
+  cd "$RSYNC_UPLOAD_DEST/current/www"
+  if [ -f "artisan" ]; then
+    $artisan_cmd 2>&1
+    if [ \$? -eq 0 ]; then
+      echo "STATUS:SUCCESS"
+    else
+      echo "STATUS:FAILED"
+    fi
+  else
+    echo "STATUS:NO_ARTISAN"
+  fi
+else
+  echo "STATUS:NO_CURRENT_RELEASE"
+fi
+EOF
+)
+
+  # Parse the result
+  local status=""
+  local output=""
+  
+  while IFS= read -r line; do
+    if [[ "$line" == STATUS:* ]]; then
+      status="${line#STATUS:}"
+    else
+      output="$output$line\n"
+    fi
+  done <<< "$maintenance_result"
+
+  case "$status" in
+    "SUCCESS")
+      echo -e "✅ Maintenance mode enabled successfully on $env."
+      [ -n "$output" ] && echo -e "\n📄 Laravel Output:\n$output"
+      
+      # Send Slack notification
+      echo ""
+      echo -e "${C1}→${CE} Sending maintenance notification to Slack..."
+      local slack_message=""
+      if [ -n "$maintenance_message" ]; then
+        slack_message="🔧 *$env* environment is now in maintenance mode: $maintenance_message"
+      else
+        slack_message="$(get_predefined_message "maintenance-down" "$env" "")"
+      fi
+      
+      local slack_emoji="${SLACK_EMOJI:-construction}"
+      cmd_notify_slack "$env" "" "$slack_message" "$slack_emoji" "$SLACK_CHANNEL" ""
+      
+      return 0
+      ;;
+    "FAILED")
+      echo -e "❌ Failed to enable maintenance mode on $env."
+      [ -n "$output" ] && echo -e "\n📄 Laravel Output:\n$output"
+      return 1
+      ;;
+    "NO_ARTISAN")
+      echo "❌ Laravel artisan file not found in $RSYNC_UPLOAD_DEST/current/www"
+      echo "ℹ️  Make sure this is a Laravel project and the deployment is correct."
+      return 1
+      ;;
+    "NO_CURRENT_RELEASE")
+      echo "❌ No current release found. Please deploy first."
+      return 1
+      ;;
+    *)
+      echo "❌ Unexpected error during maintenance mode activation:"
+      echo "$maintenance_result"
+      return 1
+      ;;
+  esac
+}
+
+cmd_maintenance_up() {
+  local env="$1"
+  local maintenance_message="$2"
+  
+  if ! load_config "$env"; then
+    return 1
+  fi
+
+  echo "✅ Bringing Laravel application out of maintenance mode on $env..."
+  
+  local artisan_cmd="cd $RSYNC_UPLOAD_DEST/current/www && php artisan up"
+  
+  echo "🎯 Target: $RSYNC_USER@$RSYNC_HOST:$RSYNC_UPLOAD_DEST/current/www"
+  echo "⚡ Command: $artisan_cmd"
+  echo ""
+  
+  # Execute the artisan up command
+  local maintenance_result=$(ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash -s <<EOF
+if [ -d "$RSYNC_UPLOAD_DEST/current/www" ]; then
+  cd "$RSYNC_UPLOAD_DEST/current/www"
+  if [ -f "artisan" ]; then
+    $artisan_cmd 2>&1
+    if [ \$? -eq 0 ]; then
+      echo "STATUS:SUCCESS"
+    else
+      echo "STATUS:FAILED"
+    fi
+  else
+    echo "STATUS:NO_ARTISAN"
+  fi
+else
+  echo "STATUS:NO_CURRENT_RELEASE"
+fi
+EOF
+)
+
+  # Parse the result
+  local status=""
+  local output=""
+  
+  while IFS= read -r line; do
+    if [[ "$line" == STATUS:* ]]; then
+      status="${line#STATUS:}"
+    else
+      output="$output$line\n"
+    fi
+  done <<< "$maintenance_result"
+
+  case "$status" in
+    "SUCCESS")
+      echo -e "✅ Maintenance mode disabled successfully on $env. Site is back online!"
+      [ -n "$output" ] && echo -e "\n📄 Laravel Output:\n$output"
+      
+      # Send Slack notification
+      echo ""
+      echo -e "${C1}→${CE} Sending maintenance completion notification to Slack..."
+      local slack_message=""
+      if [ -n "$maintenance_message" ]; then
+        slack_message="✅ *$env* environment is back online: $maintenance_message"
+      else
+        slack_message="$(get_predefined_message "maintenance-up" "$env" "")"
+      fi
+      
+      local slack_emoji="${SLACK_EMOJI:-white_check_mark}"
+      cmd_notify_slack "$env" "" "$slack_message" "$slack_emoji" "$SLACK_CHANNEL" ""
+      
+      return 0
+      ;;
+    "FAILED")
+      echo -e "❌ Failed to disable maintenance mode on $env."
+      [ -n "$output" ] && echo -e "\n📄 Laravel Output:\n$output"
+      return 1
+      ;;
+    "NO_ARTISAN")
+      echo "❌ Laravel artisan file not found in $RSYNC_UPLOAD_DEST/current/www"
+      echo "ℹ️  Make sure this is a Laravel project and the deployment is correct."
+      return 1
+      ;;
+    "NO_CURRENT_RELEASE")
+      echo "❌ No current release found. Please deploy first."
+      return 1
+      ;;
+    *)
+      echo "❌ Unexpected error during maintenance mode deactivation:"
+      echo "$maintenance_result"
+      return 1
+      ;;
+  esac
+}
+
+cmd_purge_cloudflare() {
+  local env="$1"
+  
+  if ! load_config "$env"; then
+    return 1
+  fi
+
+  if [ "$RSYNC_CLOUDFLARE_ENABLE" == "true" ] && [ ! -z "$RSYNC_CLOUDFLARE_ZONE_ID" ] && [ ! -z "$RSYNC_CLOUDFLARE_HOST" ]; then
+    echo "♻️  Purging Cloudflare cache for $RSYNC_CLOUDFLARE_HOST..."
+    echo "🔄 Purging Cloudflare cache for environment: $env"
+
+    # Check for Cloudflare config files (modern first, then legacy)
+    if [ -f "$HOME/.cloudflarerc" ]; then
+      source "$HOME/.cloudflarerc"
+    elif [ -f "$HOME/.iwcloudflarerc" ]; then
+      source "$HOME/.iwcloudflarerc"
+    else
+      echo "❌ Cloudflare config file not found"
+      echo "ℹ️  Looking for: $HOME/.cloudflarerc or $HOME/.iwcloudflarerc"
+      return 1
+    fi
+
+    # Make the API call and capture both response and HTTP status
+    response=$(curl -s -w "\n%{http_code}" -X POST "https://api.cloudflare.com/client/v4/zones/${RSYNC_CLOUDFLARE_ZONE_ID}/purge_cache" \
+      -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+      -H "Content-Type: application/json" \
+      --data '{
+        "files": [
+          "https://'${RSYNC_CLOUDFLARE_HOST}'/*"
+        ]
+      }')
+
+    # Extract HTTP status code (last line) and response body
+    http_code=$(echo "$response" | tail -n1)
+    response_body=$(echo "$response" | sed '$d')
+
+    # Check success
+    if [ "$http_code" -eq 200 ] && echo "$response_body" | grep -q '"success":true'; then
+        echo "✅ Cloudflare cache purged successfully for ${RSYNC_CLOUDFLARE_HOST}."
+        
+        # Send purge notification if Slack options were provided
+        if [ -n "$SLACK_MESSAGE_TYPE" ] || [ -n "$SLACK_CUSTOM_MESSAGE" ]; then
+          echo ""
+          echo -e "${C1}→${CE} Sending cache purge notification to Slack..."
+          local purge_message_type="purge"
+          [ -n "$SLACK_MESSAGE_TYPE" ] && purge_message_type="$SLACK_MESSAGE_TYPE"
+          cmd_notify_slack "$env" "$purge_message_type" "$SLACK_CUSTOM_MESSAGE" "$SLACK_EMOJI" "$SLACK_CHANNEL" ""
+        fi
+        
+        return 0
+    else
+        echo "❌ Cache purge failed for ${RSYNC_CLOUDFLARE_HOST}"
+        echo "HTTP Status: $http_code"
+        echo "Response: $response_body"
+        return 1
+    fi
+  else
+    echo "ℹ️  Cloudflare cache purge is disabled for this environment."
+    return 0
+  fi
+}
+
+cmd_list_releases() {
+  local env="$1"
+  
+  if ! load_config "$env"; then
+    return 1
+  fi
+
+  echo "📂 Available releases in $env:"
+  ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash -s <<EOF
+  CURRENT_LINK="$RSYNC_UPLOAD_DEST/current"
+  if [ -L "\$CURRENT_LINK" ]; then
+    CURRENT=\$(readlink "\$CURRENT_LINK" | xargs basename)
+  else
+    CURRENT=""
+  fi
+
+  if [ -d "$RSYNC_UPLOAD_DEST/releases" ]; then
+    for dir in \$(ls -1 "$RSYNC_UPLOAD_DEST/releases" | sort); do
+      if [ "\$dir" = "\$CURRENT" ]; then
+        echo "→ \$dir (current)"
+      else
+        echo "  \$dir"
+      fi
+    done
+  else
+    echo "⚠️  No releases directory found. No deployments have been made yet."
+  fi
+EOF
+}
+
+cmd_delete_release() {
+  local env="$1"
+  local target_release="$2"
+  local force="$3"
+  
+  if ! load_config "$env"; then
+    return 1
+  fi
+
+  # Get current release and all releases
+  local releases_info=$(ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash -s <<EOF
+CURRENT_LINK="$RSYNC_UPLOAD_DEST/current"
+if [ -L "\$CURRENT_LINK" ]; then
+  CURRENT=\$(readlink "\$CURRENT_LINK" | xargs basename)
+  echo "CURRENT:\$CURRENT"
+else
+  echo "CURRENT:"
+fi
+
+if [ -d "$RSYNC_UPLOAD_DEST/releases" ]; then
+  echo "RELEASES:"
+  ls -1 "$RSYNC_UPLOAD_DEST/releases" | sort
+else
+  echo "RELEASES:"
+fi
+EOF
+)
+
+  local current_release=""
+  local releases_list=()
+  local reading_releases=false
+  
+  # Parse the response
+  while IFS= read -r line; do
+    if [[ "$line" == CURRENT:* ]]; then
+      current_release="${line#CURRENT:}"
+    elif [[ "$line" == "RELEASES:" ]]; then
+      reading_releases=true
+    elif [ "$reading_releases" = true ] && [ -n "$line" ]; then
+      releases_list+=("$line")
+    fi
+  done <<< "$releases_info"
+
+  # Check if we have any releases
+  if [ ${#releases_list[@]} -eq 0 ]; then
+    echo "❌ No releases found in $env environment."
+    return 1
+  fi
+
+  # If no specific release provided, show interactive selection
+  if [ -z "$target_release" ]; then
+    echo ""
+    echo "🗑️  Select a release to delete from $env:"
+    echo ""
+    
+    local deletable_releases=()
+    local index=1
+    
+    for release in "${releases_list[@]}"; do
+      if [ "$release" = "$current_release" ]; then
+        echo -e "${C4}  ✗ $release (current - cannot delete)${CE}"
+      else
+        echo -e "${C2}  $index) $release${CE}"
+        deletable_releases+=("$release")
+        ((index++))
+      fi
+    done
+    
+    if [ ${#deletable_releases[@]} -eq 0 ]; then
+      echo ""
+      echo "❌ No releases available for deletion. Only the current release exists."
+      return 1
+    fi
+    
+    echo -e "${C4}  0) Cancel${CE}"
+    echo ""
+    
+    while true; do
+      read -p "Enter your choice (0-$((${#deletable_releases[@]}))): " choice
+      
+      if [ "$choice" = "0" ]; then
+        echo "❌ Operation cancelled."
+        return 0
+      elif [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#deletable_releases[@]} ]; then
+        target_release="${deletable_releases[$((choice-1))]}"
+        break
+      else
+        echo "❌ Invalid choice. Please enter a number between 0 and ${#deletable_releases[@]}."
+      fi
+    done
+  fi
+
+  # Validate the target release exists
+  local release_exists=false
+  for release in "${releases_list[@]}"; do
+    if [ "$release" = "$target_release" ]; then
+      release_exists=true
+      break
+    fi
+  done
+
+  if [ "$release_exists" = false ]; then
+    echo "❌ Release '$target_release' not found in $env environment."
+    return 1
+  fi
+
+  # Check if trying to delete current release
+  if [ "$target_release" = "$current_release" ]; then
+    echo "❌ Cannot delete the current active release: $target_release"
+    echo "ℹ️  You must rollback to a different release first."
+    return 1
+  fi
+
+  # Show deletion summary
+  echo ""
+  echo "🗑️  Deletion Summary:"
+  echo "Environment     : $env"
+  echo "Release to delete: $target_release"
+  echo "Current release : $current_release"
+  echo "Target path     : $RSYNC_UPLOAD_DEST/releases/$target_release"
+  echo ""
+
+  # Confirmation (unless --force is used)
+  if [ "$force" != "1" ]; then
+    echo -e "${C4}⚠️  WARNING: This action cannot be undone!${CE}"
+    echo ""
+    read -p "Are you sure you want to delete release '$target_release'? (yes/no): " confirm
+    
+    if [[ ! "$confirm" =~ ^[Yy]([Ee][Ss])?$ ]]; then
+      echo "❌ Operation cancelled."
+      return 0
+    fi
+  fi
+
+  # Perform the deletion
+  echo ""
+  echo "🗑️  Deleting release $target_release from $env..."
+  
+  local deletion_result=$(ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash -s <<EOF
+if [ -d "$RSYNC_UPLOAD_DEST/releases/$target_release" ]; then
+  rm -rf "$RSYNC_UPLOAD_DEST/releases/$target_release"
+  if [ \$? -eq 0 ]; then
+    echo "SUCCESS"
+  else
+    echo "FAILED"
+  fi
+else
+  echo "NOT_FOUND"
+fi
+EOF
+)
+
+  case "$deletion_result" in
+    "SUCCESS")
+      echo "✅ Release $target_release has been successfully deleted from $env."
+      
+      # Send Slack notification if options were provided
+      if [ -n "$SLACK_MESSAGE_TYPE" ] || [ -n "$SLACK_CUSTOM_MESSAGE" ]; then
+        echo ""
+        echo -e "${C1}→${CE} Sending deletion notification to Slack..."
+        local delete_message=""
+        if [ -n "$SLACK_CUSTOM_MESSAGE" ]; then
+          delete_message="$SLACK_CUSTOM_MESSAGE"
+        else
+          delete_message="🗑️ Release \`$target_release\` deleted from *$env* environment"
+        fi
+        cmd_notify_slack "$env" "" "$delete_message" "${SLACK_EMOJI:-recycle}" "$SLACK_CHANNEL" "$target_release"
+      fi
+      
+      return 0
+      ;;
+    "FAILED")
+      echo "❌ Failed to delete release $target_release. Check permissions and try again."
+      return 1
+      ;;
+    "NOT_FOUND")
+      echo "❌ Release directory not found: $RSYNC_UPLOAD_DEST/releases/$target_release"
+      return 1
+      ;;
+    *)
+      echo "❌ Unexpected error during deletion: $deletion_result"
+      return 1
+      ;;
+  esac
+}
+
+cmd_connect() {
+  local env="$1"
+  
+  if ! load_config "$env"; then
+    return 1
+  fi
+
+  echo "🔗 Connecting to $RSYNC_USER@$RSYNC_HOST:$RSYNC_PORT ..."
+  ssh -t -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" "cd '$RSYNC_UPLOAD_DEST' && exec bash"
+}
+
+cmd_rollback() {
+  local env="$1"
+  local release="$2"
+  
+  if [ -z "$release" ]; then
+    echo "❌ You must specify a release to roll back to using --release=TIMESTAMP"
+    return 1
+  fi
+
+  if ! load_config "$env"; then
+    return 1
+  fi
+
+  local rollback_release="$RSYNC_UPLOAD_DEST/releases/$release"
+
+  echo "🔁 Switching current symlink to release: $release"
+  ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash -s <<EOF
+    if [ ! -d "$rollback_release" ]; then
+      echo "❌ Release not found: $release"
+      exit 1
+    fi
+    ln -nsf "$rollback_release" "$RSYNC_UPLOAD_DEST/current"
+    cd "$RSYNC_UPLOAD_DEST/current"
+    if [ ! -z "$RSYNC_AFTER_SCRIPT" ]; then
+      eval "$RSYNC_AFTER_SCRIPT"
+    fi
+EOF
+  
+  if [ $? -eq 0 ]; then
+    echo "✅ Rollback complete. Apache now serves: $release"
+    
+    # Send Slack notification after successful rollback
+    echo ""
+    echo -e "${C1}→${CE} Sending rollback notification to Slack..."
+    local rollback_message_type="rollback"
+    [ -n "$SLACK_MESSAGE_TYPE" ] && rollback_message_type="$SLACK_MESSAGE_TYPE"
+    cmd_notify_slack "$env" "$rollback_message_type" "$SLACK_CUSTOM_MESSAGE" "$SLACK_EMOJI" "$SLACK_CHANNEL" "$release"
+    
+    return 0
+  else
+    echo "❌ Rollback failed."
+    return 1
+  fi
+}
+
+cmd_deploy() {
+  local env="$1"
+  local live="$2"
+  local release="$3"
+  
+  if ! load_config "$env"; then
+    return 1
+  fi
+
+  local selected_release="$release"
+  if [ -z "$selected_release" ]; then
+    selected_release=$(date +"%Y%m%d%H%M")
+  fi
+
+  local remote_release="$RSYNC_UPLOAD_DEST/releases/$selected_release"
+
+  # If a release was specified, verify that it exists
+  if [ -n "$release" ]; then
+    echo "🔍 Checking if specified release '$release' exists on the server..."
+    ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" "[ -d '$remote_release' ]"
+    if [ $? -ne 0 ]; then
+      echo "❌ Specified release '$release' does not exist on the server."
+      echo "ℹ️  Aborting deployment (even in dry-run mode)."
+      return 1
+    fi
+  fi
+
+  local log_file="$CONFIG_DIR/rsync-logs/upload-$env-$selected_release.log"
+  local exclude_file="$CONFIG_DIR/exclude-upload-$env.sync"
+  [ "$env" == "production" ] && exclude_file="$CONFIG_DIR/exclude-upload.sync"
+
+  if [ ! -f "$exclude_file" ]; then
+    echo "❌ Exclude file not found for environment '$env': $exclude_file"
+    return 1
+  fi
+
+  local rsync_cmd="rsync --rsh=\"ssh -p$RSYNC_PORT -i$RSYNC_SSH_KEY\" \
+    --delete-after \
+    --exclude-from=$exclude_file \
+    -Ppavlzi \
+    $RSYNC_UPLOAD_SRC \
+    $RSYNC_USER@$RSYNC_HOST:$remote_release"
+
+  [ "$live" -eq 0 ] && rsync_cmd="$rsync_cmd --dry-run"
+
+  # Summary
+  echo "📝 Upload Summary:"
+  echo "Environment     : $env"
+  echo "Mode            : $([ "$live" -eq 1 ] && echo 'LIVE' || echo 'DRY-RUN')"
+  echo "Release         : $selected_release"
+  echo "User            : $RSYNC_USER"
+  echo "Host            : $RSYNC_HOST"
+  echo "Port            : $RSYNC_PORT"
+  echo "Source Path     : $RSYNC_UPLOAD_SRC"
+  echo "Target Path     : $remote_release"
+  echo "Exclude File    : $exclude_file"
+  echo "Rsync Command   :"
+  echo "$rsync_cmd"
+  echo "------------------------------------------------------"
+
+  [ "$live" -eq 0 ] && echo "🔍 Dry-run mode: previewing rsync for $env upload..." || echo "🚀 LIVE mode: uploading to $env..."
+
+  # Create log directory if it doesn't exist
+  mkdir -p "$(dirname "$log_file")"
+
+  # Run rsync with prettier output
+  echo "Starting file synchronization..."
+  echo ""
+  
+  eval "$rsync_cmd" 2>&1 | while IFS= read -r line; do
+    # Parse rsync output and make it prettier
+    if [[ "$line" =~ ^([<>ch\.fdLDS\+\*]+)\ (.+)$ ]]; then
+      codes="${BASH_REMATCH[1]}"
+      filepath="${BASH_REMATCH[2]}"
+      
+      # Parse the rsync codes - look at specific patterns
+      if [[ "$codes" =~ ^cd ]]; then
+        # Directory creation
+        clean_path=$(echo "$filepath" | sed 's|^./||')
+        echo -e "${C5}+${CE} Creating: ${clean_path}"
+        
+      elif [[ "$codes" =~ ^\<f ]]; then
+        # File being sent/received
+        clean_path=$(echo "$filepath" | sed 's|^./||')
+        echo -e "   ${C1}•${CE} Adding: ${clean_path}"
+        
+      elif [[ "$codes" =~ ^\.d ]]; then
+        # Directory timestamp update - skip for cleaner output
+        continue
+        
+      elif [[ "$codes" =~ ^\>f ]]; then
+        # File being sent
+        clean_path=$(echo "$filepath" | sed 's|^./||')
+        echo -e "   ${C2}↑${CE} Sending: ${clean_path}"
+        
+      elif [[ "$codes" =~ ^hf ]]; then
+        # Hard link
+        clean_path=$(echo "$filepath" | sed 's|^./||')
+        echo -e "   ${C3}↔${CE} Linking: ${clean_path}"
+        
+      elif [[ "$codes" =~ ^\*deleting ]]; then
+        # File deletion
+        clean_path=$(echo "$filepath" | sed 's|^./||')
+        echo -e "   ${C4}×${CE} Deleting: ${clean_path}"
+        
+      fi
+      
+    elif [[ "$line" =~ ^[[:space:]]*([0-9,]+)[[:space:]]+([0-9]+%)[[:space:]]+([0-9.]+[KMGT]?B/s)[[:space:]]+([0-9:]+)[[:space:]]+\(xfr# ]]; then
+      # Skip individual file transfer progress lines to reduce noise
+      continue
+      
+    elif [[ "$line" =~ building\ file\ list ]]; then
+      echo -e "${C1}→${CE} Building file list..."
+      
+    elif [[ "$line" =~ ^([0-9,]+)\ files\ to\ consider ]]; then
+      files="${BASH_REMATCH[1]}"
+      echo -e "${C1}→${CE} Found ${files} files to consider"
+      echo ""
+      
+    elif [[ "$line" =~ ^created\ directory ]]; then
+      echo -e "${C5}+${CE} ${line}"
+      
+    elif [[ "$line" =~ ^sent\ ([0-9,]+)\ bytes.*received\ ([0-9,]+)\ bytes ]]; then
+      sent="${BASH_REMATCH[1]}"
+      received="${BASH_REMATCH[2]}"
+      echo ""
+      echo -e "${C5}✓${CE} Transfer Summary:"
+      echo -e "  ${C2}↑${CE} Sent: ${sent} bytes"
+      echo -e "  ${C1}↓${CE} Received: ${received} bytes"
+      
+    elif [[ "$line" =~ ^total\ size\ is\ ([0-9,]+).*speedup\ is\ ([0-9.]+) ]]; then
+      total="${BASH_REMATCH[1]}"
+      speedup="${BASH_REMATCH[2]}"
+      echo -e "  ∑ Total size: ${total} bytes"
+      echo -e "  ${C2}⚡${CE} Speedup: ${speedup}x"
+      echo ""
+      
+    else
+      # Show other important messages, but filter out noise
+      if [[ ! "$line" =~ ^[[:space:]]*$ ]] && [[ ! "$line" =~ to-chk= ]] && [[ ! "$line" =~ ^[[:space:]]*[0-9,]+[[:space:]]+[0-9]+% ]]; then
+        echo "$line"
+      fi
+    fi
+  done | tee "$log_file"
+
+  # Finalize if live
+  if [ "$live" -eq 1 ]; then
+    ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash -c "'
+      cd $remote_release
+      mkdir -p www/bootstrap/cache
+      ln -sfn .env.$env $remote_release/www/.env
+      rm -rf $remote_release/www/storage
+      ln -sfn $RSYNC_UPLOAD_DEST/shared/storage $remote_release/www/storage
+      git init -b main
+      git config user.name \"Deploy Bot\"
+      git config user.email \"deploy@localhost\"
+      git add .
+      git commit -m \"Deploy $selected_release\"
+      ln -nsf $remote_release $RSYNC_UPLOAD_DEST/current
+      if [ ! -z \"$RSYNC_AFTER_SCRIPT\" ]; then
+        eval \"$RSYNC_AFTER_SCRIPT\"
+      fi
+    '"
+    
+    if [ $? -eq 0 ]; then
+      echo "✅ Upload complete! Apache now serves: $selected_release"
+      
+      # Now purge Cloudflare cache automatically after successful deployment
+      echo ""
+      echo -e "${C1}→${CE} Auto-purging Cloudflare cache after upload..."
+      cmd_purge_cloudflare "$env"
+      
+      # Send Slack notification after successful deployment
+      echo ""
+      echo -e "${C1}→${CE} Sending upload notification to Slack..."
+      local deploy_message_type="deploy"
+      [ -n "$SLACK_MESSAGE_TYPE" ] && deploy_message_type="$SLACK_MESSAGE_TYPE"
+      cmd_notify_slack "$env" "$deploy_message_type" "$SLACK_CUSTOM_MESSAGE" "$SLACK_EMOJI" "$SLACK_CHANNEL" "$selected_release"
+      
+      return 0
+    else
+      echo "❌ Upload failed."
+      return 1
+    fi
+  else
+    echo "ℹ️  Dry-run complete. No changes were made on the server."
+    return 0
+  fi
+}
+
+# =============================================================================
+# MAIN SCRIPT LOGIC
+# =============================================================================
+
+# Check for help/version flags FIRST, before any other processing
+for arg in "$@"; do
+  case "$arg" in
+    --help|-h)
+      show_help
+      exit 0
+      ;;
+    --version|-v)
+      show_version
+      exit 0
+      ;;
+    --update)
+      cmd_update
+      exit $?
+      ;;
+    --slack-help)
+      show_slack_usage
+      exit 0
+      ;;
+  esac
+done
+
+# Parse arguments
+COMMAND=""
+ENV=""
+LIVE=0
+RELEASE=""
+SLACK_MESSAGE_TYPE=""
+SLACK_CUSTOM_MESSAGE=""
+SLACK_EMOJI=""
+SLACK_CHANNEL=""
+FORCE=0
+
+# Handle COMMAND as positional with new names
+VALID_COMMANDS=(setup upload rollback connect releases remove down up purge notify)
+if [[ " ${VALID_COMMANDS[*]} " == *" $1 "* ]]; then
+  COMMAND="$1"
+  shift
+fi
+
+# Map new command names to old function names for compatibility
+case $COMMAND in
+  upload)
+    FUNCTION_COMMAND="deploy"
+    ;;
+  releases) 
+    FUNCTION_COMMAND="ls-releases"
+    ;;
+  remove)
+    FUNCTION_COMMAND="delete-release"
+    ;;
+  purge)
+    FUNCTION_COMMAND="purge-cloudflare" 
+    ;;
+  notify)
+    FUNCTION_COMMAND="notify-slack"
+    ;;
+  *)
+    FUNCTION_COMMAND="$COMMAND"
+    ;;
+esac
+
+# Parse remaining arguments
+for arg in "$@"; do
+  case $arg in
+    --staging)
+      ENV="staging"
+      ;;
+    --prod|--production)
+      ENV="production"
+      ;;
+    --env=*)
+      ENV="${arg#*=}"
+      ;;
+    --release=*)
+      RELEASE="${arg#*=}"
+      ;;
+    --live)
+      LIVE=1
+      ;;
+    --force)
+      FORCE=1
+      ;;
+    --message=*)
+      SLACK_MESSAGE_TYPE="${arg#*=}"
+      if [[ "$COMMAND" == "down" || "$COMMAND" == "up" ]]; then
+        SLACK_CUSTOM_MESSAGE="${arg#*=}"
+      fi
+      ;;
+    --custom=*)
+      SLACK_CUSTOM_MESSAGE="${arg#*=}"
+      ;;
+    --emoji=*)
+      SLACK_EMOJI="${arg#*=}"
+      ;;
+    --channel=*)
+      SLACK_CHANNEL="${arg#*=}"
+      ;;
+  esac
+done
+
+# Show usage if no command provided AND no help flags were used
+if [ -z "$COMMAND" ]; then
+  # Check if user ran with no arguments or unknown arguments
+  if [ $# -eq 0 ]; then
+    show_usage
+  else
+    echo "❌ Unknown command: $1"
+    echo ""
+    echo "Use 'laradep --help' to see available commands."
+  fi
+  exit 1
+fi
+
+# Skip environment validation for help commands (they don't need --env)
+case "$1" in
+  --help|-h|--version|-v|--slack-help)
+    exit 0
+    ;;
+esac
+
+# Validate environment for commands that need it
+if [ -z "$ENV" ]; then
+  echo "❌ You must specify the environment using --env=staging|production"
+  exit 1
+fi
+
+if [[ "$ENV" != "staging" && "$ENV" != "trial" && "$ENV" != "production" ]]; then
+  echo "❌ Invalid environment: $ENV"
+  echo "Usage: laradep $COMMAND --env=staging|production"
+  exit 1
+fi
+
+# Execute the command using the mapped function names
+case $FUNCTION_COMMAND in
+  setup)
+    cmd_setup "$ENV"
+    exit $?
+    ;;
+  deploy)
+    cmd_deploy "$ENV" "$LIVE" "$RELEASE"
+    exit $?
+    ;;
+  rollback)
+    cmd_rollback "$ENV" "$RELEASE"
+    exit $?
+    ;;
+  connect)
+    cmd_connect "$ENV"
+    exit $?
+    ;;
+  ls-releases)
+    cmd_list_releases "$ENV"
+    exit $?
+    ;;
+  delete-release)
+    cmd_delete_release "$ENV" "$RELEASE" "$FORCE"
+    exit $?
+    ;;
+  down)
+    cmd_maintenance_down "$ENV" "$SLACK_CUSTOM_MESSAGE"
+    exit $?
+    ;;
+  up)
+    cmd_maintenance_up "$ENV" "$SLACK_CUSTOM_MESSAGE"
+    exit $?
+    ;;
+  purge-cloudflare)
+    cmd_purge_cloudflare "$ENV"
+    exit $?
+    ;;
+  notify-slack)
+    cmd_notify_slack "$ENV" "$SLACK_MESSAGE_TYPE" "$SLACK_CUSTOM_MESSAGE" "$SLACK_EMOJI" "$SLACK_CHANNEL" "$RELEASE"
+    exit $?
+    ;;
+  *)
+    echo "❌ Unknown command: $COMMAND"
+    show_usage
+    exit 1
+    ;;
+esac

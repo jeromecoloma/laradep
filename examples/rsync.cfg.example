@@ -1,0 +1,20 @@
+# Production deployment configuration for laradep
+
+# Server connection settings
+RSYNC_USER="deploy"
+RSYNC_HOST="your-production-server.com"
+RSYNC_PORT="22"
+RSYNC_SSH_KEY="$HOME/.ssh/id_rsa"
+
+# Deployment paths
+RSYNC_UPLOAD_SRC="./www/"
+RSYNC_UPLOAD_DEST="/var/www/your-app"
+
+# Cloudflare cache purging (optional)
+RSYNC_CLOUDFLARE_ENABLE="true"
+RSYNC_CLOUDFLARE_ZONE_ID="your-cloudflare-zone-id"
+RSYNC_CLOUDFLARE_HOST="your-domain.com"
+
+# Post-deployment commands (optional)
+# These commands run after successful deployment
+RSYNC_AFTER_SCRIPT="php artisan migrate --force && php artisan config:cache && php artisan route:cache && php artisan view:cache"

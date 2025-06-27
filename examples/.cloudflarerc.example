@@ -1,0 +1,8 @@
+# Cloudflare API Token (recommended - more secure than Global API Key)
+# Create at: https://dash.cloudflare.com/profile/api-tokens
+# Permissions needed: Zone:Zone Settings:Read, Zone:Cache Purge:Edit
+CLOUDFLARE_API_TOKEN="your-cloudflare-api-token-here"
+
+# Alternative: Global API Key (less secure, not recommended)
+# CLOUDFLARE_EMAIL="your-email@domain.com"
+# CLOUDFLARE_API_KEY="your-global-api-key"

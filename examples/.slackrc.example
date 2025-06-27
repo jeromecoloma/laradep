@@ -1,0 +1,8 @@
+# This file contains the same variables as slackbootstrap
+# You can use either approach:
+# 1. Put everything in slackbootstrap
+# 2. Split between .slackrc (webhook/auth) and slackbootstrap (defaults)
+
+# Slack webhook URL (preferred name)
+SLACK_WEBHOOK="https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+

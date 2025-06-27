@@ -1,0 +1,66 @@
+# Files and directories to exclude from deployment
+
+# Version control
+.git/
+.gitignore
+.gitattributes
+
+# Development files
+.env.local
+.env.example
+README.md
+composer.lock
+package-lock.json
+
+# Node modules and build artifacts
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Development tools
+.phpunit.result.cache
+phpunit.xml
+.phpcs.xml
+.phpmd.xml
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Laravel specific
+storage/app/*
+storage/framework/cache/*
+storage/framework/sessions/*
+storage/framework/views/*
+storage/logs/*
+bootstrap/cache/*
+
+# Keep important files
+!storage/app/.gitkeep
+!storage/app/public/
+!storage/framework/cache/.gitkeep
+!storage/framework/sessions/.gitkeep
+!storage/framework/views/.gitkeep
+!storage/logs/.gitkeep
+!bootstrap/cache/.gitkeep
+
+# Deployment scripts (don't upload deployment configs to server)
+_scripts/
+deploy.sh
+laradep
+
+# Testing
+tests/
+phpunit.xml
+.phpunit.result.cache
+
+# Documentation
+docs/
+*.md

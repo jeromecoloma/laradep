@@ -1,0 +1,14 @@
+# Slack webhook URL (get this from your Slack app configuration)
+SLACK_WEBHOOK="https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+
+# Default Slack channel for notifications
+SLACK_CHANNEL="deployments"
+
+# Bot username for Slack messages
+SLACK_USERNAME="Laradep Bot"
+
+# Default emoji for messages (optional)
+SLACK_EMOJI="rocket"
+
+# Default upload/deployment message (optional - can be overridden per command)
+SLACK_UPLOAD_MESSAGE="🚀 Deployment completed successfully to {env} environment"
