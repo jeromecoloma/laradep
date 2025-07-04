@@ -1445,7 +1445,19 @@ cmd_deploy() {
     ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash -c "'
       cd $remote_release
       mkdir -p www/bootstrap/cache
-      ln -sfn .env.$env $remote_release/www/.env
+      
+      # Support both .env naming conventions
+      # Check for new format first (.env.staging), then old format (.staging.env)
+      if [ -f \"$remote_release/www/.env.$env\" ]; then
+        echo \"Using new .env format: .env.$env\"
+        ln -sfn .env.$env $remote_release/www/.env
+      elif [ -f \"$remote_release/www/.$env.env\" ]; then
+        echo \"Using old .env format: .$env.env\"
+        ln -sfn .$env.env $remote_release/www/.env
+      else
+        echo \"Warning: No environment file found for $env (checked .env.$env and .$env.env)\"
+      fi
+      
       rm -rf $remote_release/www/storage
       ln -sfn $RSYNC_UPLOAD_DEST/shared/storage $remote_release/www/storage
       git init -b main
