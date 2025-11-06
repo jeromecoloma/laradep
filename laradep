@@ -589,6 +589,7 @@ cmd_setup() {
   echo "  - $RSYNC_UPLOAD_DEST/shared/storage/.gitkeep (create if missing)"
   echo "  - $RSYNC_UPLOAD_DEST/shared/storage/README.md (explain purpose)"
   echo "  - $RSYNC_UPLOAD_DEST/shared/storage/framework/{cache,sessions,views} (create if missing)"
+  echo "  - $RSYNC_UPLOAD_DEST/shared/database (mkdir if missing - for SQLite persistence)"
   echo "  - $RSYNC_UPLOAD_DEST/releases (mkdir if missing)"
 
   ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash -s <<EOF
