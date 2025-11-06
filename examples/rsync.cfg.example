@@ -15,6 +15,11 @@ RSYNC_CLOUDFLARE_ENABLE="true"
 RSYNC_CLOUDFLARE_ZONE_ID="your-cloudflare-zone-id"
 RSYNC_CLOUDFLARE_HOST="your-domain.com"
 
+# SQLite database handling (optional)
+# Set to "true" to symlink database.sqlite from shared storage
+# This prevents overwriting production database during deployments
+RSYNC_DATABASE_ENABLE="false"
+
 # Post-deployment commands (optional)
 # These commands run after successful deployment
 RSYNC_AFTER_SCRIPT="php artisan migrate --force && php artisan config:cache && php artisan route:cache && php artisan view:cache"

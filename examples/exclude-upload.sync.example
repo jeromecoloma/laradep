@@ -42,6 +42,14 @@ storage/framework/views/*
 storage/logs/*
 bootstrap/cache/*
 
+# SQLite databases (prevent overwriting production data)
+# Only exclude if using RSYNC_DATABASE_ENABLE="true" in rsync.cfg
+*.sqlite
+*.sqlite3
+*.db
+database/*.sqlite*
+database/*.db
+
 # Keep important files
 !storage/app/.gitkeep
 !storage/app/public/

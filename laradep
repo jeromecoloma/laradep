@@ -2,9 +2,9 @@
 
 # Laravel Deployment Tool (laradep)
 # A comprehensive deployment script for Laravel applications
-# Version: 1.0.6
+# Version: 1.0.7
 
-LARADEP_VERSION="1.0.6"
+LARADEP_VERSION="1.0.7"
 LARADEP_REPO_USER="jeromecoloma"
 
 # Get the directory where this script is located
@@ -597,6 +597,7 @@ cmd_setup() {
     mkdir -p "$RSYNC_UPLOAD_DEST/shared/storage/framework/cache" && chmod 755 "$RSYNC_UPLOAD_DEST/shared/storage/framework/cache"
     mkdir -p "$RSYNC_UPLOAD_DEST/shared/storage/framework/sessions" && chmod 755 "$RSYNC_UPLOAD_DEST/shared/storage/framework/sessions"
     mkdir -p "$RSYNC_UPLOAD_DEST/shared/storage/framework/views" && chmod 755 "$RSYNC_UPLOAD_DEST/shared/storage/framework/views"
+    mkdir -p "$RSYNC_UPLOAD_DEST/shared/database" && chmod 755 "$RSYNC_UPLOAD_DEST/shared/database"
 
     [ -f "$RSYNC_UPLOAD_DEST/shared/storage/.gitkeep" ] || touch "$RSYNC_UPLOAD_DEST/shared/storage/.gitkeep"
     [ -f "$RSYNC_UPLOAD_DEST/shared/storage/README.md" ] || cat <<EOT > "$RSYNC_UPLOAD_DEST/shared/storage/README.md"
@@ -1460,6 +1461,21 @@ cmd_deploy() {
       
       rm -rf $remote_release/www/storage
       ln -sfn $RSYNC_UPLOAD_DEST/shared/storage $remote_release/www/storage
+
+      # SQLite database symlink (if enabled)
+      if [ \"$RSYNC_DATABASE_ENABLE\" = \"true\" ] && [ -d \"$remote_release/www/database\" ]; then
+        echo \"Creating SQLite database symlink...\"
+        # Remove any .sqlite files from the uploaded release
+        find $remote_release/www/database -type f \( -name \"*.sqlite\" -o -name \"*.sqlite3\" -o -name \"*.db\" \) -delete 2>/dev/null || true
+        # Create symlink for database.sqlite if it doesn't exist in shared
+        if [ ! -f \"$RSYNC_UPLOAD_DEST/shared/database/database.sqlite\" ]; then
+          echo \"Creating empty database.sqlite in shared storage\"
+          touch $RSYNC_UPLOAD_DEST/shared/database/database.sqlite
+          chmod 644 $RSYNC_UPLOAD_DEST/shared/database/database.sqlite
+        fi
+        ln -sfn $RSYNC_UPLOAD_DEST/shared/database/database.sqlite $remote_release/www/database/database.sqlite
+      fi
+
       git init -b main
       git config user.name \"Deploy Bot\"
       git config user.email \"deploy@localhost\"

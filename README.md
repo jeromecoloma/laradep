@@ -104,6 +104,9 @@ RSYNC_CLOUDFLARE_ENABLE="true"
 RSYNC_CLOUDFLARE_ZONE_ID="your-zone-id"
 RSYNC_CLOUDFLARE_HOST="your-domain.com"
 
+# SQLite database handling (optional)
+RSYNC_DATABASE_ENABLE="true"
+
 # Post-deployment script (optional)
 RSYNC_AFTER_SCRIPT="php artisan migrate --force && php artisan config:cache"
 ```
@@ -129,6 +132,37 @@ SLACK_WEBHOOK="https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
 SLACK_CHANNEL="deployments"
 SLACK_USERNAME="Laradep Bot"
 ```
+
+### SQLite Database Configuration
+
+For Laravel applications using SQLite databases, laradep can automatically manage database persistence across deployments using symlinks (similar to how `storage/` is handled).
+
+**Enable in your `rsync.cfg`:**
+```bash
+# SQLite database handling
+RSYNC_DATABASE_ENABLE="true"
+```
+
+**Add to your `exclude-upload.sync` file:**
+```bash
+# SQLite databases (prevent overwriting production data)
+*.sqlite
+*.sqlite3
+*.db
+database/*.sqlite*
+```
+
+**How it works:**
+1. During `setup`, creates `shared/database/` directory
+2. During `upload`, any `.sqlite` files in the release are removed
+3. Creates symlink from `www/database/database.sqlite` → `shared/database/database.sqlite`
+4. Production database persists across all deployments
+
+**Important Notes:**
+- The first deployment will create an empty `database.sqlite` in shared storage
+- You should manually migrate and seed your production database after initial setup
+- Database files are excluded from rsync to prevent overwriting production data
+- Works for projects storing SQLite in `www/database/database.sqlite`
 
 ### Cloudflare Configuration
 
