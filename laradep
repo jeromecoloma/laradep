@@ -1443,33 +1443,33 @@ cmd_deploy() {
 
   # Finalize if live
   if [ "$live" -eq 1 ]; then
-    ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash -c "'
+    ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash <<ENDSSH
       cd $remote_release
       mkdir -p www/bootstrap/cache
-      
+
       # Support both .env naming conventions
       # Check for new format first (.env.staging), then old format (.staging.env)
-      if [ -f \"$remote_release/www/.env.$env\" ]; then
-        echo \"Using new .env format: .env.$env\"
+      if [ -f "$remote_release/www/.env.$env" ]; then
+        echo "Using new .env format: .env.$env"
         ln -sfn .env.$env $remote_release/www/.env
-      elif [ -f \"$remote_release/www/.$env.env\" ]; then
-        echo \"Using old .env format: .$env.env\"
+      elif [ -f "$remote_release/www/.$env.env" ]; then
+        echo "Using old .env format: .$env.env"
         ln -sfn .$env.env $remote_release/www/.env
       else
-        echo \"Warning: No environment file found for $env (checked .env.$env and .$env.env)\"
+        echo "Warning: No environment file found for $env (checked .env.$env and .$env.env)"
       fi
-      
+
       rm -rf $remote_release/www/storage
       ln -sfn $RSYNC_UPLOAD_DEST/shared/storage $remote_release/www/storage
 
       # SQLite database symlink (if enabled)
-      if [ \"$RSYNC_DATABASE_ENABLE\" = \"true\" ] && [ -d \"$remote_release/www/database\" ]; then
-        echo \"Creating SQLite database symlink...\"
+      if [ "$RSYNC_DATABASE_ENABLE" = "true" ] && [ -d "$remote_release/www/database" ]; then
+        echo "Creating SQLite database symlink..."
         # Remove any .sqlite files from the uploaded release
-        find $remote_release/www/database -type f \( -name \"*.sqlite\" -o -name \"*.sqlite3\" -o -name \"*.db\" \) -delete 2>/dev/null || true
+        find $remote_release/www/database -type f \( -name "*.sqlite" -o -name "*.sqlite3" -o -name "*.db" \) -delete 2>/dev/null || true
         # Create symlink for database.sqlite if it doesn't exist in shared
-        if [ ! -f \"$RSYNC_UPLOAD_DEST/shared/database/database.sqlite\" ]; then
-          echo \"Creating empty database.sqlite in shared storage\"
+        if [ ! -f "$RSYNC_UPLOAD_DEST/shared/database/database.sqlite" ]; then
+          echo "Creating empty database.sqlite in shared storage"
           touch $RSYNC_UPLOAD_DEST/shared/database/database.sqlite
           chmod 644 $RSYNC_UPLOAD_DEST/shared/database/database.sqlite
         fi
@@ -1477,15 +1477,15 @@ cmd_deploy() {
       fi
 
       git init -b main
-      git config user.name \"Deploy Bot\"
-      git config user.email \"deploy@localhost\"
+      git config user.name "Deploy Bot"
+      git config user.email "deploy@localhost"
       git add .
-      git commit -m \"Deploy $selected_release\"
+      git commit -m "Deploy $selected_release"
       ln -nsf $remote_release $RSYNC_UPLOAD_DEST/current
-      if [ ! -z \"$RSYNC_AFTER_SCRIPT\" ]; then
-        eval \"$RSYNC_AFTER_SCRIPT\"
+      if [ ! -z "$RSYNC_AFTER_SCRIPT" ]; then
+        eval "$RSYNC_AFTER_SCRIPT"
       fi
-    '"
+ENDSSH
     
     if [ $? -eq 0 ]; then
       echo "✅ Upload complete! Apache now serves: $selected_release"
