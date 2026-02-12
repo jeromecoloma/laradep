@@ -2,9 +2,9 @@
 
 # Laravel Deployment Tool (laradep)
 # A comprehensive deployment script for Laravel applications
-# Version: 1.0.9
+# Version: 1.0.11
 
-LARADEP_VERSION="1.0.10"
+LARADEP_VERSION="1.0.11"
 LARADEP_REPO_USER="jeromecoloma"
 
 # Get the directory where this script is located
@@ -30,6 +30,120 @@ fi
 # Check if command exists
 command_exists() {
     command -v "$1" >/dev/null 2>&1
+}
+
+normalize_existing_path() {
+    local path="$1"
+
+    if [ -d "$path" ]; then
+        (cd "$path" 2>/dev/null && pwd -P)
+        return $?
+    fi
+
+    if [ -e "$path" ]; then
+        local parent_dir
+        parent_dir="$(dirname "$path")"
+        local base_name
+        base_name="$(basename "$path")"
+        parent_dir="$(cd "$parent_dir" 2>/dev/null && pwd -P)" || return 1
+        echo "$parent_dir/$base_name"
+        return 0
+    fi
+
+    return 1
+}
+
+is_within_dir() {
+    local child="$1"
+    local parent="$2"
+    case "$child/" in
+        "$parent/"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+resolve_upload_source_path() {
+    local src="$1"
+    local trailing_slash=""
+    [[ "$src" == */ ]] && trailing_slash="/"
+
+    if [[ -z "$src" ]]; then
+        echo "$src"
+        return 0
+    fi
+
+    if [[ "$src" == /* ]]; then
+        echo "$src"
+        return 0
+    fi
+
+    local project_root_abs=""
+    project_root_abs="$(normalize_existing_path "$PROJECT_ROOT" 2>/dev/null || true)"
+
+    local config_dir_abs=""
+    config_dir_abs="$(normalize_existing_path "$CONFIG_DIR" 2>/dev/null || true)"
+
+    local pwd_abs=""
+    pwd_abs="$(normalize_existing_path "$(pwd)" 2>/dev/null || true)"
+
+    local candidate normalized
+
+    if [[ -n "$project_root_abs" ]]; then
+        candidate="$project_root_abs/$src"
+        normalized="$(normalize_existing_path "$candidate" 2>/dev/null || true)"
+        if [[ -n "$normalized" ]] && is_within_dir "$normalized" "$project_root_abs"; then
+            echo "${normalized%/}${trailing_slash}"
+            return 0
+        fi
+    fi
+
+    if [[ -n "$config_dir_abs" ]]; then
+        candidate="$config_dir_abs/$src"
+        normalized="$(normalize_existing_path "$candidate" 2>/dev/null || true)"
+        if [[ -n "$normalized" ]] && { [[ -z "$project_root_abs" ]] || is_within_dir "$normalized" "$project_root_abs"; }; then
+            echo "${normalized%/}${trailing_slash}"
+            return 0
+        fi
+    fi
+
+    if [[ -n "$pwd_abs" ]]; then
+        candidate="$pwd_abs/$src"
+        normalized="$(normalize_existing_path "$candidate" 2>/dev/null || true)"
+        if [[ -n "$normalized" ]] && { [[ -z "$project_root_abs" ]] || is_within_dir "$normalized" "$project_root_abs"; }; then
+            echo "${normalized%/}${trailing_slash}"
+            return 0
+        fi
+    fi
+
+    if [[ -n "$config_dir_abs" ]]; then
+        candidate="$config_dir_abs/$src"
+        normalized="$(normalize_existing_path "$candidate" 2>/dev/null || true)"
+        if [[ -n "$normalized" ]]; then
+            echo "${normalized%/}${trailing_slash}"
+            return 0
+        fi
+    fi
+
+    if [[ -n "$project_root_abs" ]]; then
+        candidate="$project_root_abs/$src"
+        normalized="$(normalize_existing_path "$candidate" 2>/dev/null || true)"
+        if [[ -n "$normalized" ]]; then
+            echo "${normalized%/}${trailing_slash}"
+            return 0
+        fi
+    fi
+
+    if [[ -n "$pwd_abs" ]]; then
+        candidate="$pwd_abs/$src"
+        normalized="$(normalize_existing_path "$candidate" 2>/dev/null || true)"
+        if [[ -n "$normalized" ]]; then
+            echo "${normalized%/}${trailing_slash}"
+            return 0
+        fi
+    fi
+
+    echo "${project_root_abs:-$(pwd)}/$src"
+    return 0
 }
 
 detect_config_directory() {
@@ -436,9 +550,9 @@ load_config() {
   # Clean up destination path
   RSYNC_UPLOAD_DEST="${RSYNC_UPLOAD_DEST%/}"
 
-  # Resolve relative RSYNC_UPLOAD_SRC to PROJECT_ROOT
+  # Resolve relative RSYNC_UPLOAD_SRC in a stable way across invocation paths
   if [[ -n "$RSYNC_UPLOAD_SRC" && "$RSYNC_UPLOAD_SRC" != /* ]]; then
-    RSYNC_UPLOAD_SRC="$PROJECT_ROOT/$RSYNC_UPLOAD_SRC"
+    RSYNC_UPLOAD_SRC="$(resolve_upload_source_path "$RSYNC_UPLOAD_SRC")"
   fi
 
   return 0
