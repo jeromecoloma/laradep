@@ -4,7 +4,7 @@
 # A comprehensive deployment script for Laravel applications
 # Version: 1.0.9
 
-LARADEP_VERSION="1.0.9"
+LARADEP_VERSION="1.0.10"
 LARADEP_REPO_USER="jeromecoloma"
 
 # Get the directory where this script is located
@@ -66,6 +66,17 @@ detect_config_directory() {
 }
 
 CONFIG_DIR="$(detect_config_directory)"
+
+# Derive project root from config directory
+if [[ "$CONFIG_DIR" == */_scripts ]]; then
+  PROJECT_ROOT="${CONFIG_DIR%/_scripts}"
+elif [[ "$CONFIG_DIR" == */scripts ]]; then
+  PROJECT_ROOT="${CONFIG_DIR%/scripts}"
+elif [[ "$CONFIG_DIR" == */.deploy ]]; then
+  PROJECT_ROOT="${CONFIG_DIR%/.deploy}"
+else
+  PROJECT_ROOT="$(pwd)"
+fi
 
 # =============================================================================
 # SHARED FUNCTIONS
@@ -424,7 +435,12 @@ load_config() {
   
   # Clean up destination path
   RSYNC_UPLOAD_DEST="${RSYNC_UPLOAD_DEST%/}"
-  
+
+  # Resolve relative RSYNC_UPLOAD_SRC to PROJECT_ROOT
+  if [[ -n "$RSYNC_UPLOAD_SRC" && "$RSYNC_UPLOAD_SRC" != /* ]]; then
+    RSYNC_UPLOAD_SRC="$PROJECT_ROOT/$RSYNC_UPLOAD_SRC"
+  fi
+
   return 0
 }
 
