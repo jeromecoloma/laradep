@@ -364,7 +364,7 @@ show_help() {
   echo ""
   echo "📖 Usage:"
   echo "  laradep setup --env=staging|production"
-  echo "  laradep upload --env=staging|production [--live] [--release=TIMESTAMP]"
+  echo "  laradep upload --env=staging|production [--live] [--release=TIMESTAMP|--current-release]"
   echo "  laradep rollback --env=staging|production --release=TIMESTAMP"
   echo "  laradep connect --env=staging|production"
   echo "  laradep releases --env=staging|production"
@@ -399,6 +399,10 @@ show_help() {
   echo "🗑️  Remove Release Options:"
   echo "  --release=TIMESTAMP   Delete specific release (must not be current)"
   echo "  --force               Skip confirmation prompt"
+  echo ""
+  echo "📦 Upload Options:"
+  echo "  --release=TIMESTAMP   Upload into a specific existing release directory"
+  echo "  --current-release     Upload into the current active release directory"
   echo ""
   echo "🔧 Maintenance Mode Options:"
   echo "  --message='MESSAGE'   Custom maintenance message (optional)"
@@ -425,7 +429,7 @@ show_usage() {
   echo ""
   echo "📖 Usage:"
   echo "  laradep setup --env=staging|production"
-  echo "  laradep upload --env=staging|production [--live] [--release=TIMESTAMP]"
+  echo "  laradep upload --env=staging|production [--live] [--release=TIMESTAMP|--current-release]"
   echo "  laradep rollback --env=staging|production --release=TIMESTAMP"
   echo "  laradep connect --env=staging|production"
   echo "  laradep releases --env=staging|production"
@@ -460,6 +464,10 @@ show_usage() {
   echo "🗑️  Remove Release Options:"
   echo "  --release=TIMESTAMP   Delete specific release (must not be current)"
   echo "  --force               Skip confirmation prompt"
+  echo ""
+  echo "📦 Upload Options:"
+  echo "  --release=TIMESTAMP   Upload into a specific existing release directory"
+  echo "  --current-release     Upload into the current active release directory"
   echo ""
   echo "🔧 Maintenance Mode Options:"
   echo "  --message='MESSAGE'   Custom maintenance message (optional)"
@@ -1431,24 +1439,33 @@ cmd_deploy() {
   local env="$1"
   local live="$2"
   local release="$3"
+  local use_current_release="${4:-0}"
   
   if ! load_config "$env"; then
     return 1
   fi
 
   local selected_release="$release"
-  if [ -z "$selected_release" ]; then
+  if [ "$use_current_release" -eq 1 ]; then
+    echo "🔍 Resolving current active release on the server..."
+    selected_release=$(ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" "CURRENT_LINK='$RSYNC_UPLOAD_DEST/current'; if [ -L \"\$CURRENT_LINK\" ]; then readlink \"\$CURRENT_LINK\" | xargs basename; fi")
+    if [ -z "$selected_release" ]; then
+      echo "❌ No current active release found on the server."
+      echo "ℹ️  Aborting deployment. Deploy a release first or use --release=TIMESTAMP."
+      return 1
+    fi
+  elif [ -z "$selected_release" ]; then
     selected_release=$(date +"%Y%m%d%H%M")
   fi
 
   local remote_release="$RSYNC_UPLOAD_DEST/releases/$selected_release"
 
   # If a release was specified, verify that it exists
-  if [ -n "$release" ]; then
-    echo "🔍 Checking if specified release '$release' exists on the server..."
+  if [ -n "$release" ] || [ "$use_current_release" -eq 1 ]; then
+    echo "🔍 Checking if target release '$selected_release' exists on the server..."
     ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" "[ -d '$remote_release' ]"
     if [ $? -ne 0 ]; then
-      echo "❌ Specified release '$release' does not exist on the server."
+      echo "❌ Target release '$selected_release' does not exist on the server."
       echo "ℹ️  Aborting deployment (even in dry-run mode)."
       return 1
     fi
@@ -1675,6 +1692,7 @@ COMMAND=""
 ENV=""
 LIVE=0
 RELEASE=""
+CURRENT_RELEASE=0
 SLACK_MESSAGE_TYPE=""
 SLACK_CUSTOM_MESSAGE=""
 SLACK_EMOJI=""
@@ -1725,6 +1743,9 @@ for arg in "$@"; do
     --release=*)
       RELEASE="${arg#*=}"
       ;;
+    --current-release)
+      CURRENT_RELEASE=1
+      ;;
     --live)
       LIVE=1
       ;;
@@ -1748,6 +1769,16 @@ for arg in "$@"; do
       ;;
   esac
 done
+
+if [ "$CURRENT_RELEASE" -eq 1 ] && [ -n "$RELEASE" ]; then
+  echo "❌ Only one of --release or --current-release can be used at a time."
+  exit 1
+fi
+
+if [ "$CURRENT_RELEASE" -eq 1 ] && [ -n "$COMMAND" ] && [ "$COMMAND" != "upload" ]; then
+  echo "❌ --current-release can only be used with the upload command."
+  exit 1
+fi
 
 # Show usage if no command provided AND no help flags were used
 if [ -z "$COMMAND" ]; then
@@ -1788,7 +1819,7 @@ case $FUNCTION_COMMAND in
     exit $?
     ;;
   deploy)
-    cmd_deploy "$ENV" "$LIVE" "$RELEASE"
+    cmd_deploy "$ENV" "$LIVE" "$RELEASE" "$CURRENT_RELEASE"
     exit $?
     ;;
   rollback)

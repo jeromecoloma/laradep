@@ -68,6 +68,9 @@ laradep up --env=production
 # Upload with custom Slack notification
 laradep upload --env=production --live --custom="🎉 New feature deployed!"
 
+# Upload into the current active release (instead of creating a new release)
+laradep upload --env=production --live --current-release
+
 # Remove old releases
 laradep remove --env=staging --release=202501260800 --force
 
@@ -77,6 +80,17 @@ laradep purge --env=production
 # Connect to server
 laradep connect --env=staging
 ```
+
+### Upload Release Targeting
+
+`upload` supports two ways to target an existing release:
+
+- `--release=TIMESTAMP` uploads into a specific existing release directory.
+- `--current-release` uploads into the active `current` release directory.
+
+If neither is provided, `upload` creates a new timestamped release (default behavior).
+
+`--release` and `--current-release` are mutually exclusive and cannot be used together.
 
 ## ⚙️ Configuration
 
@@ -208,7 +222,7 @@ your-laravel-app/
 | Command | Description | Key Options |
 |---------|-------------|-------------|
 | `setup` | Initialize server environment | `--env` |
-| `upload` | Deploy Laravel application | `--env`, `--live`, `--release` |
+| `upload` | Deploy Laravel application | `--env`, `--live`, `--release`, `--current-release` |
 | `rollback` | Switch to previous release | `--env`, `--release` |
 | `releases` | List available releases | `--env` |
 | `remove` | Delete old releases | `--env`, `--release`, `--force` |

@@ -87,7 +87,8 @@ _laradep() {
                         upload)
                             _arguments -S \
                                 '--live[Execute live deployment (not dry-run)]' \
-                                '--release=[Specific release timestamp]:release timestamp:' \
+                                '(--current-release)--release=[Specific release timestamp]:release timestamp:' \
+                                '(--release)--current-release[Upload into the current active release]' \
                                 '--message=[Slack message type]:message type:->slack_messages' \
                                 '--custom=[Custom Slack message]:custom message:' \
                                 '--emoji=[Slack emoji type]:emoji type:->emojis' \
