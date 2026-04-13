@@ -103,6 +103,9 @@ Laradep looks for configuration files in these locations:
 ### Sample Configuration (`_scripts/rsync.cfg`)
 
 ```bash
+# Laradep marker
+RSYNC_LARADEP="true"
+
 # Server connection
 RSYNC_USER="deploy"
 RSYNC_HOST="your-server.com"

@@ -1,5 +1,8 @@
 # Production deployment configuration for laradep
 
+# Laradep marker (used by external tools to identify laradep-managed projects)
+RSYNC_LARADEP="true"
+
 # Server connection settings
 RSYNC_USER="deploy"
 RSYNC_HOST="your-production-server.com"
