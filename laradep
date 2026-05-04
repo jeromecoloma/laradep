@@ -364,6 +364,7 @@ show_help() {
   echo ""
   echo "📖 Usage:"
   echo "  laradep setup --env=staging|production"
+  echo "  laradep seed --env=staging|production [--live] [--force]"
   echo "  laradep upload --env=staging|production [--live] [--release=TIMESTAMP|--current-release]"
   echo "  laradep rollback --env=staging|production --release=TIMESTAMP"
   echo "  laradep connect --env=staging|production"
@@ -379,6 +380,7 @@ show_help() {
   echo ""
   echo "🛠 Commands:"
   echo "  setup       Prepares the remote environment by creating necessary directories."
+  echo "  seed        Seed initial files into shared/storage and shared/database (merge, no delete)."
   echo "  upload      Syncs Laravel files to remote server and switches release symlink."
   echo "  rollback    Switches the current symlink to a specific release."
   echo "  connect     SSH into the remote server at the environment's root path."
@@ -404,11 +406,16 @@ show_help() {
   echo "  --release=TIMESTAMP   Upload into a specific existing release directory"
   echo "  --current-release     Upload into the current active release directory"
   echo ""
+  echo "🌱 Seed Options:"
+  echo "  --live                Execute the transfer (default is dry-run)"
+  echo "  --force               Overwrite an existing remote shared/database/database.sqlite"
+  echo ""
   echo "🔧 Maintenance Mode Options:"
   echo "  --message='MESSAGE'   Custom maintenance message (optional)"
   echo ""
   echo "📝 Examples:"
   echo "  laradep upload --env=production --live"
+  echo "  laradep seed --env=staging --live"
   echo "  laradep down --env=production --message='Scheduled maintenance for 30 minutes'"
   echo "  laradep up --env=production --message='Maintenance completed, site is back online'"
   echo "  laradep down --env=staging (uses default message)"
@@ -429,6 +436,7 @@ show_usage() {
   echo ""
   echo "📖 Usage:"
   echo "  laradep setup --env=staging|production"
+  echo "  laradep seed --env=staging|production [--live] [--force]"
   echo "  laradep upload --env=staging|production [--live] [--release=TIMESTAMP|--current-release]"
   echo "  laradep rollback --env=staging|production --release=TIMESTAMP"
   echo "  laradep connect --env=staging|production"
@@ -444,6 +452,7 @@ show_usage() {
   echo ""
   echo "🛠 Commands:"
   echo "  setup       Prepares the remote environment by creating necessary directories."
+  echo "  seed        Seed initial files into shared/storage and shared/database (merge, no delete)."
   echo "  upload      Syncs Laravel files to remote server and switches release symlink."
   echo "  rollback    Switches the current symlink to a specific release."
   echo "  connect     SSH into the remote server at the environment's root path."
@@ -750,9 +759,10 @@ EOF
   echo "✅ Setup complete. You can now run: laradep upload --env=$env --live"
   echo ""
   echo -e "${C2}📝 Next steps:${CE}"
-  echo -e "${C2}   1. Run your first deployment: laradep upload --env=$env --live${CE}"
-  echo -e "${C2}   2. Verify deployment: laradep releases --env=$env${CE}"
-  echo -e "${C2}   3. Test your application in the browser${CE}"
+  echo -e "${C2}   1. (Optional) Seed initial shared storage / SQLite: laradep seed --env=$env --live${CE}"
+  echo -e "${C2}   2. Run your first deployment: laradep upload --env=$env --live${CE}"
+  echo -e "${C2}   3. Verify deployment: laradep releases --env=$env${CE}"
+  echo -e "${C2}   4. Test your application in the browser${CE}"
   
   # Send setup notification if Slack options were provided
   if [ -n "$SLACK_MESSAGE_TYPE" ] || [ -n "$SLACK_CUSTOM_MESSAGE" ]; then
@@ -762,6 +772,95 @@ EOF
     [ -n "$SLACK_MESSAGE_TYPE" ] && setup_message_type="$SLACK_MESSAGE_TYPE"
     cmd_notify_slack "$env" "$setup_message_type" "$SLACK_CUSTOM_MESSAGE" "$SLACK_EMOJI" "$SLACK_CHANNEL" ""
   fi
+}
+
+cmd_seed() {
+  local env="$1"
+  local live="$2"
+  local force="${3:-0}"
+
+  if ! load_config "$env"; then
+    return 1
+  fi
+
+  local src_root="${RSYNC_UPLOAD_SRC%/}"
+  local storage_src="$src_root/storage/"
+  local db_src="$src_root/database/database.sqlite"
+  local remote_shared="$RSYNC_UPLOAD_DEST/shared"
+  local remote_storage="$remote_shared/storage/"
+  local remote_db="$remote_shared/database/database.sqlite"
+
+  echo "🌱 Seed Summary:"
+  echo "Environment     : $env"
+  echo "Mode            : $([ "$live" -eq 1 ] && echo 'LIVE' || echo 'DRY-RUN')"
+  echo "Storage Source  : $storage_src"
+  echo "Storage Target  : $RSYNC_USER@$RSYNC_HOST:$remote_storage"
+  if [ "$RSYNC_DATABASE_ENABLE" = "true" ]; then
+    echo "Database Source : $db_src"
+    echo "Database Target : $RSYNC_USER@$RSYNC_HOST:$remote_db"
+  fi
+  echo "------------------------------------------------------"
+
+  # Verify shared exists on remote (i.e. setup has been run)
+  if ! ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" "[ -d '$remote_shared/storage' ]"; then
+    echo -e "${C4}❌ Remote shared directory not found: $remote_shared/storage${CE}"
+    echo -e "${C2}ℹ️  Run 'laradep setup --env=$env' first.${CE}"
+    return 1
+  fi
+
+  # Seed storage (merge semantics: no --delete)
+  if [ ! -d "$storage_src" ]; then
+    echo -e "${C3}⚠️  Local storage directory not found: $storage_src — skipping storage seed.${CE}"
+  else
+    echo ""
+    echo -e "${C1}→${CE} Seeding shared/storage (merge, will not delete remote files)..."
+    local rsync_flags=(--rsh="ssh -p$RSYNC_PORT -i$RSYNC_SSH_KEY" -avz
+      --exclude='framework/cache/*' --exclude='framework/sessions/*'
+      --exclude='framework/views/*' --exclude='logs/*'
+      --exclude='.gitkeep')
+    [ "$live" -eq 0 ] && rsync_flags+=(--dry-run)
+    rsync "${rsync_flags[@]}" "$storage_src" "$RSYNC_USER@$RSYNC_HOST:$remote_storage"
+    local rc=$?
+    if [ $rc -ne 0 ]; then
+      echo -e "${C4}❌ Storage seed failed (rsync exit $rc).${CE}"
+      return $rc
+    fi
+  fi
+
+  # Seed SQLite database (only when enabled)
+  if [ "$RSYNC_DATABASE_ENABLE" = "true" ]; then
+    if [ ! -f "$db_src" ]; then
+      echo -e "${C3}⚠️  Local SQLite not found: $db_src — skipping database seed.${CE}"
+    else
+      echo ""
+      echo -e "${C1}→${CE} Seeding shared/database/database.sqlite..."
+      local remote_exists=0
+      if ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" "[ -s '$remote_db' ]"; then
+        remote_exists=1
+      fi
+      if [ "$remote_exists" -eq 1 ] && [ "$force" -ne 1 ]; then
+        echo -e "${C3}⚠️  Remote $remote_db already exists and is non-empty.${CE}"
+        echo -e "${C2}ℹ️  Re-run with --force to overwrite (existing data will be lost).${CE}"
+      else
+        local db_flags=(--rsh="ssh -p$RSYNC_PORT -i$RSYNC_SSH_KEY" -avz)
+        [ "$live" -eq 0 ] && db_flags+=(--dry-run)
+        rsync "${db_flags[@]}" "$db_src" "$RSYNC_USER@$RSYNC_HOST:$remote_db"
+        local rc=$?
+        if [ $rc -ne 0 ]; then
+          echo -e "${C4}❌ Database seed failed (rsync exit $rc).${CE}"
+          return $rc
+        fi
+      fi
+    fi
+  fi
+
+  echo ""
+  if [ "$live" -eq 1 ]; then
+    echo -e "${C2}✅ Seed complete.${CE}"
+  else
+    echo -e "${C2}ℹ️  Dry-run complete. Re-run with --live to apply.${CE}"
+  fi
+  return 0
 }
 
 cmd_notify_slack() {
@@ -1700,7 +1799,7 @@ SLACK_CHANNEL=""
 FORCE=0
 
 # Handle COMMAND as positional with new names
-VALID_COMMANDS=(setup upload rollback connect releases remove down up purge notify)
+VALID_COMMANDS=(setup seed upload rollback connect releases remove down up purge notify)
 if [[ " ${VALID_COMMANDS[*]} " == *" $1 "* ]]; then
   COMMAND="$1"
   shift
@@ -1816,6 +1915,10 @@ fi
 case $FUNCTION_COMMAND in
   setup)
     cmd_setup "$ENV"
+    exit $?
+    ;;
+  seed)
+    cmd_seed "$ENV" "$LIVE" "$FORCE"
     exit $?
     ;;
   deploy)

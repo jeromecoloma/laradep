@@ -12,6 +12,7 @@ _laradep() {
     local -a commands
     commands=(
         'setup:Prepares the remote environment by creating necessary directories'
+        'seed:Seed initial files into shared/storage and shared/database (merge, no delete)'
         'upload:Syncs Laravel files to remote server and switches release symlink'
         'rollback:Switches the current symlink to a specific release'
         'connect:SSH into the remote server at the environment root path'
@@ -68,7 +69,7 @@ _laradep() {
             ;;
         args)
             case $words[2] in
-                setup|upload|rollback|connect|releases|remove|down|up|purge|notify)
+                setup|seed|upload|rollback|connect|releases|remove|down|up|purge|notify)
                     _arguments -S \
                         '--env=[Environment]:environment:->environments' \
                         '--staging[Use staging environment]' \
@@ -84,6 +85,11 @@ _laradep() {
                     ;;
                 command_args)
                     case $words[2] in
+                        seed)
+                            _arguments -S \
+                                '--live[Execute live transfer (not dry-run)]' \
+                                '--force[Overwrite existing remote shared/database/database.sqlite]'
+                            ;;
                         upload)
                             _arguments -S \
                                 '--live[Execute live deployment (not dry-run)]' \
