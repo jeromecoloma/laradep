@@ -1579,7 +1579,7 @@ cmd_rollback() {
 EOF
   
   if [ $? -eq 0 ]; then
-    echo "✅ Rollback complete. Apache now serves: $release"
+    echo "✅ Rollback complete. Now serving: $release"
     
     # Send Slack notification after successful rollback
     echo ""
@@ -1810,7 +1810,7 @@ cmd_deploy() {
 ENDSSH
     
     if [ $? -eq 0 ]; then
-      echo "✅ Upload complete! Apache now serves: $selected_release"
+      echo "✅ Upload complete! Now serving: $selected_release"
       
       # Now purge Cloudflare cache automatically after successful deployment
       echo ""
