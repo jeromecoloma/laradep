@@ -6,6 +6,7 @@ A comprehensive command-line deployment tool specifically designed for Laravel a
 
 - **🔄 Zero-downtime deployments** with release management
 - **📦 Automatic release versioning** with rollback capabilities
+- **🌱 Initial-data seeding** into shared storage and SQLite
 - **🔧 Laravel maintenance mode** management (`artisan down/up`)
 - **♻️ Cloudflare cache purging** integration
 - **📱 Slack notifications** with customizable messages
@@ -44,6 +45,9 @@ curl -fsSL https://raw.githubusercontent.com/jeromecoloma/laradep/main/install.s
 ```bash
 # Initial server setup
 laradep setup --env=staging
+
+# (Optional) Seed initial files into shared/storage and shared/database
+laradep seed --env=staging --live
 
 # Deploy to staging (dry-run)
 laradep upload --env=staging
@@ -92,13 +96,39 @@ If neither is provided, `upload` creates a new timestamped release (default beha
 
 `--release` and `--current-release` are mutually exclusive and cannot be used together.
 
+### Seeding Initial Shared Data
+
+The release directory's `www/storage/` is replaced by a symlink to `shared/storage/` during deployment, so any files in your local `storage/` would be discarded on the very first deploy. The `seed` command rsyncs them into the remote `shared/` tree once, ahead of (or independently from) `upload`.
+
+```bash
+# Dry-run preview
+laradep seed --env=staging
+
+# Apply
+laradep seed --env=staging --live
+
+# Overwrite an existing remote shared/database/database.sqlite
+laradep seed --env=staging --live --force
+```
+
+Behavior:
+- Merges `www/storage/` into `shared/storage/` — never deletes remote files.
+- Excludes `framework/{cache,sessions,views}/*` and `logs/*`.
+- When `RSYNC_DATABASE_ENABLE="true"`, also seeds `www/database/database.sqlite` into `shared/database/database.sqlite`. Refuses to overwrite an existing non-empty remote SQLite unless `--force` is passed.
+- Refuses to run before `setup` has created the remote `shared/` tree.
+
+Tip: keep seed files you don't want web-reachable under `storage/app/` (or a private subdir), not `storage/app/public/`. Only `storage/app/public/` is exposed via the optional `php artisan storage:link` symlink.
+
 ## ⚙️ Configuration
 
-Laradep looks for configuration files in these locations:
-- `_scripts/rsync.cfg` (production)
-- `_scripts/rsync-staging.cfg` (staging)
-- `scripts/rsync*.cfg`
-- `.deploy/rsync*.cfg`
+Laradep looks for configuration files in this priority order:
+1. Git root `_scripts/` (when run inside a git repo)
+2. Current directory `_scripts/`
+3. Current directory `scripts/`
+4. Current directory `.deploy/`
+5. Home directory `~/.deploy/`
+
+Within the chosen directory it loads `rsync.cfg` for production and `rsync-staging.cfg` for staging.
 
 ### Sample Configuration (`_scripts/rsync.cfg`)
 
@@ -225,6 +255,7 @@ your-laravel-app/
 | Command | Description | Key Options |
 |---------|-------------|-------------|
 | `setup` | Initialize server environment | `--env` |
+| `seed` | Seed initial files into `shared/storage` (and optional SQLite) | `--env`, `--live`, `--force` |
 | `upload` | Deploy Laravel application | `--env`, `--live`, `--release`, `--current-release` |
 | `rollback` | Switch to previous release | `--env`, `--release` |
 | `releases` | List available releases | `--env` |
@@ -261,8 +292,9 @@ laradep/
 ├── completions/         # Zsh completion
 │   └── _laradep
 ├── install.sh           # Installation script
-├── README.md           # This file
-└── examples/           # Configuration examples
+├── README.md            # This file
+├── CHANGELOG.md         # Release notes
+└── examples/            # Configuration examples
     ├── rsync.cfg.example
     └── exclude-upload.sync.example
 ```
@@ -283,13 +315,16 @@ laradep/
 # 1. Initial setup (one-time)
 laradep setup --env=production
 
-# 2. Deploy new release
+# 2. (Optional, one-time) Seed initial shared storage / SQLite
+laradep seed --env=production --live
+
+# 3. Deploy new release
 laradep upload --env=production --live
 
-# 3. If issues arise, rollback
+# 4. If issues arise, rollback
 laradep rollback --env=production --release=202501270800
 
-# 4. Clean up old releases
+# 5. Clean up old releases
 laradep remove --env=production
 ```
 
