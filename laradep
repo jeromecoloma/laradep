@@ -4,7 +4,7 @@
 # A comprehensive deployment script for Laravel applications
 # Version: 1.0.12
 
-LARADEP_VERSION="1.0.12"
+LARADEP_VERSION="1.0.13"
 LARADEP_REPO_USER="jeromecoloma"
 
 # Get the directory where this script is located
