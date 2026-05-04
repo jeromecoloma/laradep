@@ -1,6 +1,9 @@
 _assets/
 _scripts/
 
+# https://github.com/jeromecoloma/sessionx
+.sessionx.yaml
+
 # Linux
 *~
 
