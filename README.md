@@ -136,11 +136,16 @@ Within the chosen directory it loads `rsync.cfg` for production and `rsync-stagi
 # Laradep marker
 RSYNC_LARADEP="true"
 
-# Server connection
+# Server connection (option A: explicit user + host)
 RSYNC_USER="deploy"
 RSYNC_HOST="your-server.com"
 RSYNC_PORT="22"
 RSYNC_SSH_KEY="$HOME/.ssh/id_rsa"
+
+# Server connection (option B: ~/.ssh/config Host alias — required when using ProxyJump)
+# RSYNC_SSH_HOST_ALIAS="myserver-staging"
+# When set, RSYNC_USER/RSYNC_HOST/RSYNC_PORT/RSYNC_SSH_KEY are ignored and
+# ~/.ssh/config (User, HostName, Port, IdentityFile, ProxyJump, …) drives the connection.
 
 # Deployment paths
 RSYNC_UPLOAD_SRC="./www/"

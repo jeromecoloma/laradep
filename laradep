@@ -4,7 +4,7 @@
 # A comprehensive deployment script for Laravel applications
 # Version: 1.0.12
 
-LARADEP_VERSION="1.0.13"
+LARADEP_VERSION="1.0.15"
 LARADEP_REPO_USER="jeromecoloma"
 
 # Get the directory where this script is located
@@ -410,6 +410,16 @@ show_help() {
   echo "  --live                Execute the transfer (default is dry-run)"
   echo "  --force               Overwrite an existing remote shared/database/database.sqlite"
   echo ""
+  echo "🔑 SSH Config Variables (in rsync.cfg):"
+  echo "  RSYNC_SSH_HOST_ALIAS  Use a ~/.ssh/config host alias for all connection settings."
+  echo "                        When set, RSYNC_USER/RSYNC_HOST/RSYNC_PORT/RSYNC_SSH_KEY are"
+  echo "                        ignored — SSH reads everything (User, Port, IdentityFile,"
+  echo "                        ProxyJump, etc.) from the matching Host block in ~/.ssh/config."
+  echo "  RSYNC_SSH_KEY         Path to SSH private key (traditional mode)"
+  echo "  RSYNC_SSH_PROXY_JUMP  ProxyJump host (traditional mode)"
+  echo "  RSYNC_SSH_CONFIG_FILE Path to a custom SSH config file"
+  echo "  RSYNC_SSH_EXTRA_OPTS  Additional SSH options (space-separated)"
+  echo ""
   echo "🔧 Maintenance Mode Options:"
   echo "  --message='MESSAGE'   Custom maintenance message (optional)"
   echo ""
@@ -477,6 +487,16 @@ show_usage() {
   echo "📦 Upload Options:"
   echo "  --release=TIMESTAMP   Upload into a specific existing release directory"
   echo "  --current-release     Upload into the current active release directory"
+  echo ""
+  echo "🔑 SSH Config Variables (in rsync.cfg):"
+  echo "  RSYNC_SSH_HOST_ALIAS  Use a ~/.ssh/config host alias for all connection settings."
+  echo "                        When set, RSYNC_USER/RSYNC_HOST/RSYNC_PORT/RSYNC_SSH_KEY are"
+  echo "                        ignored — SSH reads everything (User, Port, IdentityFile,"
+  echo "                        ProxyJump, etc.) from the matching Host block in ~/.ssh/config."
+  echo "  RSYNC_SSH_KEY         Path to SSH private key (traditional mode)"
+  echo "  RSYNC_SSH_PROXY_JUMP  ProxyJump host (traditional mode)"
+  echo "  RSYNC_SSH_CONFIG_FILE Path to a custom SSH config file"
+  echo "  RSYNC_SSH_EXTRA_OPTS  Additional SSH options (space-separated)"
   echo ""
   echo "🔧 Maintenance Mode Options:"
   echo "  --message='MESSAGE'   Custom maintenance message (optional)"
@@ -564,6 +584,35 @@ load_config() {
   fi
   RSYNC_PORT="${RSYNC_PORT:-22}"
   
+  # Build shared SSH options array
+  SSH_OPTS=(-p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY")
+  [ -n "$RSYNC_SSH_CONFIG_FILE" ]   && SSH_OPTS+=(-F "$RSYNC_SSH_CONFIG_FILE")
+  [ -n "$RSYNC_SSH_PROXY_JUMP" ]    && SSH_OPTS+=(-o "ProxyJump=$RSYNC_SSH_PROXY_JUMP")
+  [ -n "$RSYNC_SSH_PROXY_COMMAND" ] && SSH_OPTS+=(-o "ProxyCommand=$RSYNC_SSH_PROXY_COMMAND")
+  if [ -n "$RSYNC_SSH_EXTRA_OPTS" ]; then
+    read -ra _ssh_extra <<< "$RSYNC_SSH_EXTRA_OPTS"
+    SSH_OPTS+=("${_ssh_extra[@]}")
+  fi
+
+  # Determine SSH connection target
+  if [ -n "$RSYNC_SSH_HOST_ALIAS" ]; then
+    # SSH config alias mode: let ~/.ssh/config handle User, Port, IdentityFile, ProxyJump, etc.
+    SSH_OPTS=()
+    [ -n "$RSYNC_SSH_CONFIG_FILE" ] && SSH_OPTS+=(-F "$RSYNC_SSH_CONFIG_FILE")
+    if [ -n "$RSYNC_SSH_EXTRA_OPTS" ]; then
+      read -ra _ssh_extra <<< "$RSYNC_SSH_EXTRA_OPTS"
+      SSH_OPTS+=("${_ssh_extra[@]}")
+    fi
+    RSYNC_SSH_TARGET="$RSYNC_SSH_HOST_ALIAS"
+  else
+    # Traditional mode: use explicit RSYNC_USER, RSYNC_HOST, key, port
+    if [ -z "$RSYNC_USER" ] || [ -z "$RSYNC_HOST" ]; then
+      echo "❌ Config '$CONFIG_FILE' must define RSYNC_USER and RSYNC_HOST, or RSYNC_SSH_HOST_ALIAS."
+      return 1
+    fi
+    RSYNC_SSH_TARGET="$RSYNC_USER@$RSYNC_HOST"
+  fi
+
   # Clean up destination path
   RSYNC_UPLOAD_DEST="${RSYNC_UPLOAD_DEST%/}"
 
@@ -739,7 +788,7 @@ cmd_setup() {
   echo "  - $RSYNC_UPLOAD_DEST/shared/database (mkdir if missing - for SQLite persistence)"
   echo "  - $RSYNC_UPLOAD_DEST/releases (mkdir if missing)"
 
-  ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash -s <<EOF
+  ssh "${SSH_OPTS[@]}" "$RSYNC_SSH_TARGET" bash -s <<EOF
     umask 022
     mkdir -p "$RSYNC_UPLOAD_DEST/shared/storage" && chmod 755 "$RSYNC_UPLOAD_DEST/shared/storage"
     mkdir -p "$RSYNC_UPLOAD_DEST/shared/storage/framework/cache" && chmod 755 "$RSYNC_UPLOAD_DEST/shared/storage/framework/cache"
@@ -794,15 +843,23 @@ cmd_seed() {
   echo "Environment     : $env"
   echo "Mode            : $([ "$live" -eq 1 ] && echo 'LIVE' || echo 'DRY-RUN')"
   echo "Storage Source  : $storage_src"
-  echo "Storage Target  : $RSYNC_USER@$RSYNC_HOST:$remote_storage"
+  echo "Storage Target  : $RSYNC_SSH_TARGET:$remote_storage"
   if [ "$RSYNC_DATABASE_ENABLE" = "true" ]; then
     echo "Database Source : $db_src"
-    echo "Database Target : $RSYNC_USER@$RSYNC_HOST:$remote_db"
+    echo "Database Target : $RSYNC_SSH_TARGET:$remote_db"
   fi
   echo "------------------------------------------------------"
 
+  # Build rsync --rsh value from SSH_OPTS, properly quoted
+  local _ssh_rsh
+  if [ ${#SSH_OPTS[@]} -gt 0 ]; then
+    _ssh_rsh="ssh $(printf '%q ' "${SSH_OPTS[@]}")"
+  else
+    _ssh_rsh="ssh"
+  fi
+
   # Verify shared exists on remote (i.e. setup has been run)
-  if ! ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" "[ -d '$remote_shared/storage' ]"; then
+  if ! ssh "${SSH_OPTS[@]}" "$RSYNC_SSH_TARGET" "[ -d '$remote_shared/storage' ]"; then
     echo -e "${C4}❌ Remote shared directory not found: $remote_shared/storage${CE}"
     echo -e "${C2}ℹ️  Run 'laradep setup --env=$env' first.${CE}"
     return 1
@@ -814,12 +871,12 @@ cmd_seed() {
   else
     echo ""
     echo -e "${C1}→${CE} Seeding shared/storage (merge, will not delete remote files)..."
-    local rsync_flags=(--rsh="ssh -p$RSYNC_PORT -i$RSYNC_SSH_KEY" -avz
+    local rsync_flags=(--rsh="$_ssh_rsh" -avz
       --exclude='framework/cache/*' --exclude='framework/sessions/*'
       --exclude='framework/views/*' --exclude='logs/*'
       --exclude='.gitkeep')
     [ "$live" -eq 0 ] && rsync_flags+=(--dry-run)
-    rsync "${rsync_flags[@]}" "$storage_src" "$RSYNC_USER@$RSYNC_HOST:$remote_storage"
+    rsync "${rsync_flags[@]}" "$storage_src" "$RSYNC_SSH_TARGET:$remote_storage"
     local rc=$?
     if [ $rc -ne 0 ]; then
       echo -e "${C4}❌ Storage seed failed (rsync exit $rc).${CE}"
@@ -835,16 +892,16 @@ cmd_seed() {
       echo ""
       echo -e "${C1}→${CE} Seeding shared/database/database.sqlite..."
       local remote_exists=0
-      if ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" "[ -s '$remote_db' ]"; then
+      if ssh "${SSH_OPTS[@]}" "$RSYNC_SSH_TARGET" "[ -s '$remote_db' ]"; then
         remote_exists=1
       fi
       if [ "$remote_exists" -eq 1 ] && [ "$force" -ne 1 ]; then
         echo -e "${C3}⚠️  Remote $remote_db already exists and is non-empty.${CE}"
         echo -e "${C2}ℹ️  Re-run with --force to overwrite (existing data will be lost).${CE}"
       else
-        local db_flags=(--rsh="ssh -p$RSYNC_PORT -i$RSYNC_SSH_KEY" -avz)
+        local db_flags=(--rsh="$_ssh_rsh" -avz)
         [ "$live" -eq 0 ] && db_flags+=(--dry-run)
-        rsync "${db_flags[@]}" "$db_src" "$RSYNC_USER@$RSYNC_HOST:$remote_db"
+        rsync "${db_flags[@]}" "$db_src" "$RSYNC_SSH_TARGET:$remote_db"
         local rc=$?
         if [ $rc -ne 0 ]; then
           echo -e "${C4}❌ Database seed failed (rsync exit $rc).${CE}"
@@ -1032,12 +1089,12 @@ cmd_maintenance_down() {
     echo "📝 Message: $maintenance_message (will be sent via Slack)"
   fi
   
-  echo "🎯 Target: $RSYNC_USER@$RSYNC_HOST:$RSYNC_UPLOAD_DEST/current/www"
+  echo "🎯 Target: $RSYNC_SSH_TARGET:$RSYNC_UPLOAD_DEST/current/www"
   echo "⚡ Command: $artisan_cmd"
   echo ""
   
   # Execute the artisan down command
-  local maintenance_result=$(ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash -s <<EOF
+  local maintenance_result=$(ssh "${SSH_OPTS[@]}" "$RSYNC_SSH_TARGET" bash -s <<EOF
 if [ -d "$RSYNC_UPLOAD_DEST/current/www" ]; then
   cd "$RSYNC_UPLOAD_DEST/current/www"
   if [ -f "artisan" ]; then
@@ -1122,12 +1179,12 @@ cmd_maintenance_up() {
   
   local artisan_cmd="cd $RSYNC_UPLOAD_DEST/current/www && php artisan up"
   
-  echo "🎯 Target: $RSYNC_USER@$RSYNC_HOST:$RSYNC_UPLOAD_DEST/current/www"
+  echo "🎯 Target: $RSYNC_SSH_TARGET:$RSYNC_UPLOAD_DEST/current/www"
   echo "⚡ Command: $artisan_cmd"
   echo ""
   
   # Execute the artisan up command
-  local maintenance_result=$(ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash -s <<EOF
+  local maintenance_result=$(ssh "${SSH_OPTS[@]}" "$RSYNC_SSH_TARGET" bash -s <<EOF
 if [ -d "$RSYNC_UPLOAD_DEST/current/www" ]; then
   cd "$RSYNC_UPLOAD_DEST/current/www"
   if [ -f "artisan" ]; then
@@ -1270,7 +1327,7 @@ cmd_list_releases() {
   fi
 
   echo "📂 Available releases in $env:"
-  ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash -s <<EOF
+  ssh "${SSH_OPTS[@]}" "$RSYNC_SSH_TARGET" bash -s <<EOF
   CURRENT_LINK="$RSYNC_UPLOAD_DEST/current"
   if [ -L "\$CURRENT_LINK" ]; then
     CURRENT=\$(readlink "\$CURRENT_LINK" | xargs basename)
@@ -1302,7 +1359,7 @@ cmd_delete_release() {
   fi
 
   # Get current release and all releases
-  local releases_info=$(ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash -s <<EOF
+  local releases_info=$(ssh "${SSH_OPTS[@]}" "$RSYNC_SSH_TARGET" bash -s <<EOF
 CURRENT_LINK="$RSYNC_UPLOAD_DEST/current"
 if [ -L "\$CURRENT_LINK" ]; then
   CURRENT=\$(readlink "\$CURRENT_LINK" | xargs basename)
@@ -1430,7 +1487,7 @@ EOF
   echo ""
   echo "🗑️  Deleting release $target_release from $env..."
   
-  local deletion_result=$(ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash -s <<EOF
+  local deletion_result=$(ssh "${SSH_OPTS[@]}" "$RSYNC_SSH_TARGET" bash -s <<EOF
 if [ -d "$RSYNC_UPLOAD_DEST/releases/$target_release" ]; then
   rm -rf "$RSYNC_UPLOAD_DEST/releases/$target_release"
   if [ \$? -eq 0 ]; then
@@ -1485,8 +1542,12 @@ cmd_connect() {
     return 1
   fi
 
-  echo "🔗 Connecting to $RSYNC_USER@$RSYNC_HOST:$RSYNC_PORT ..."
-  ssh -t -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" "cd '$RSYNC_UPLOAD_DEST' && exec bash"
+  if [ -n "$RSYNC_SSH_HOST_ALIAS" ]; then
+    echo "🔗 Connecting to $RSYNC_SSH_HOST_ALIAS (via SSH config alias) ..."
+  else
+    echo "🔗 Connecting to $RSYNC_USER@$RSYNC_HOST:$RSYNC_PORT ..."
+  fi
+  ssh -t "${SSH_OPTS[@]}" "$RSYNC_SSH_TARGET" "cd '$RSYNC_UPLOAD_DEST' && exec bash"
 }
 
 cmd_rollback() {
@@ -1505,7 +1566,7 @@ cmd_rollback() {
   local rollback_release="$RSYNC_UPLOAD_DEST/releases/$release"
 
   echo "🔁 Switching current symlink to release: $release"
-  ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash -s <<EOF
+  ssh "${SSH_OPTS[@]}" "$RSYNC_SSH_TARGET" bash -s <<EOF
     if [ ! -d "$rollback_release" ]; then
       echo "❌ Release not found: $release"
       exit 1
@@ -1547,7 +1608,7 @@ cmd_deploy() {
   local selected_release="$release"
   if [ "$use_current_release" -eq 1 ]; then
     echo "🔍 Resolving current active release on the server..."
-    selected_release=$(ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" "CURRENT_LINK='$RSYNC_UPLOAD_DEST/current'; if [ -L \"\$CURRENT_LINK\" ]; then readlink \"\$CURRENT_LINK\" | xargs basename; fi")
+    selected_release=$(ssh "${SSH_OPTS[@]}" "$RSYNC_SSH_TARGET" "CURRENT_LINK='$RSYNC_UPLOAD_DEST/current'; if [ -L \"\$CURRENT_LINK\" ]; then readlink \"\$CURRENT_LINK\" | xargs basename; fi")
     if [ -z "$selected_release" ]; then
       echo "❌ No current active release found on the server."
       echo "ℹ️  Aborting deployment. Deploy a release first or use --release=TIMESTAMP."
@@ -1562,7 +1623,7 @@ cmd_deploy() {
   # If a release was specified, verify that it exists
   if [ -n "$release" ] || [ "$use_current_release" -eq 1 ]; then
     echo "🔍 Checking if target release '$selected_release' exists on the server..."
-    ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" "[ -d '$remote_release' ]"
+    ssh "${SSH_OPTS[@]}" "$RSYNC_SSH_TARGET" "[ -d '$remote_release' ]"
     if [ $? -ne 0 ]; then
       echo "❌ Target release '$selected_release' does not exist on the server."
       echo "ℹ️  Aborting deployment (even in dry-run mode)."
@@ -1579,12 +1640,18 @@ cmd_deploy() {
     return 1
   fi
 
-  local rsync_cmd="rsync --rsh=\"ssh -p$RSYNC_PORT -i$RSYNC_SSH_KEY\" \
+  local _ssh_rsh
+  if [ ${#SSH_OPTS[@]} -gt 0 ]; then
+    _ssh_rsh=" $(printf '%q ' "${SSH_OPTS[@]}")"
+  else
+    _ssh_rsh=""
+  fi
+  local rsync_cmd="rsync --rsh=\"ssh$_ssh_rsh\" \
     --delete-after \
     --exclude-from=$exclude_file \
     -Ppavlzi \
     $RSYNC_UPLOAD_SRC \
-    $RSYNC_USER@$RSYNC_HOST:$remote_release"
+    $RSYNC_SSH_TARGET:$remote_release"
 
   [ "$live" -eq 0 ] && rsync_cmd="$rsync_cmd --dry-run"
 
@@ -1593,12 +1660,20 @@ cmd_deploy() {
   echo "Environment     : $env"
   echo "Mode            : $([ "$live" -eq 1 ] && echo 'LIVE' || echo 'DRY-RUN')"
   echo "Release         : $selected_release"
-  echo "User            : $RSYNC_USER"
-  echo "Host            : $RSYNC_HOST"
-  echo "Port            : $RSYNC_PORT"
+  if [ -n "$RSYNC_SSH_HOST_ALIAS" ]; then
+    echo "SSH Target      : $RSYNC_SSH_HOST_ALIAS (SSH config alias)"
+  else
+    echo "User            : $RSYNC_USER"
+    echo "Host            : $RSYNC_HOST"
+    echo "Port            : $RSYNC_PORT"
+  fi
   echo "Source Path     : $RSYNC_UPLOAD_SRC"
   echo "Target Path     : $remote_release"
   echo "Exclude File    : $exclude_file"
+  [ -n "$RSYNC_SSH_PROXY_JUMP" ]    && echo "Proxy Jump      : $RSYNC_SSH_PROXY_JUMP"
+  [ -n "$RSYNC_SSH_PROXY_COMMAND" ] && echo "Proxy Command   : $RSYNC_SSH_PROXY_COMMAND"
+  [ -n "$RSYNC_SSH_CONFIG_FILE" ]   && echo "SSH Config      : $RSYNC_SSH_CONFIG_FILE"
+  [ -n "$RSYNC_SSH_EXTRA_OPTS" ]    && echo "Extra SSH Opts  : $RSYNC_SSH_EXTRA_OPTS"
   echo "Rsync Command   :"
   echo "$rsync_cmd"
   echo "------------------------------------------------------"
@@ -1690,7 +1765,7 @@ cmd_deploy() {
 
   # Finalize if live
   if [ "$live" -eq 1 ]; then
-    ssh -p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY" "$RSYNC_USER@$RSYNC_HOST" bash <<ENDSSH
+    ssh "${SSH_OPTS[@]}" "$RSYNC_SSH_TARGET" bash <<ENDSSH
       cd $remote_release
       mkdir -p www/bootstrap/cache
 
