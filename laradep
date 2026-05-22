@@ -1649,7 +1649,7 @@ cmd_deploy() {
   local rsync_cmd="rsync --rsh=\"ssh$_ssh_rsh\" \
     --delete-after \
     --exclude-from=$exclude_file \
-    --partial -pavlzi \
+    --partial -palzi \
     $RSYNC_UPLOAD_SRC \
     $RSYNC_SSH_TARGET:$remote_release"
 
@@ -1687,7 +1687,7 @@ cmd_deploy() {
   echo "Starting file synchronization..."
   echo ""
   
-  eval "$rsync_cmd" 2>&1 | while IFS= read -r line; do
+  eval "$rsync_cmd" 2>&1 | tr '\r' '\n' | while IFS= read -r line; do
     # Parse rsync output and make it prettier
     if [[ "$line" =~ ^([<>ch\.fdLDS\+\*]+)\ (.+)$ ]]; then
       codes="${BASH_REMATCH[1]}"
