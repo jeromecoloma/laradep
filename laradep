@@ -1649,7 +1649,7 @@ cmd_deploy() {
   local rsync_cmd="rsync --rsh=\"ssh$_ssh_rsh\" \
     --delete-after \
     --exclude-from=$exclude_file \
-    -Ppavlzi \
+    --partial -pavlzi \
     $RSYNC_UPLOAD_SRC \
     $RSYNC_SSH_TARGET:$remote_release"
 
