@@ -2,6 +2,11 @@
 
 All notable changes to laradep are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.16] - 2026-05-22
+
+### Fixed
+- Dropped `--progress` from the rsync flags (`-Ppavlzi` → `--partial -pavlzi`) so dry-run and live upload output is no longer jumbled by carriage-return progress fragments getting glued onto the pretty-printed itemized lines.
+
 ## [1.0.15] - 2026-05-04
 
 ### Changed
