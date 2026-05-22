@@ -1766,6 +1766,8 @@ cmd_deploy() {
   # Finalize if live
   if [ "$live" -eq 1 ]; then
     ssh "${SSH_OPTS[@]}" "$RSYNC_SSH_TARGET" bash <<ENDSSH
+      set -euo pipefail
+      trap 'echo "❌ Remote step failed at line \$LINENO (exit \$?)" >&2' ERR
       cd $remote_release
       mkdir -p www/bootstrap/cache
 
