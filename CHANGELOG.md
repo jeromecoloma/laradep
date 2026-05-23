@@ -2,6 +2,18 @@
 
 All notable changes to laradep are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.17] - 2026-05-23
+
+### Added
+- SSH keepalive (`ServerAliveInterval=30`, `ServerAliveCountMax=10`) on every ssh/rsync call to prevent long-running deploys from dropping with exit 255.
+- Remote deploy block now runs under `set -Eeuo pipefail` with an `ERR` trap that reports the failing line number and exit code.
+- SSH heredoc output is tee'd to `<log>-ssh.log`, and on failure the last 40 lines are dumped to the terminal so the real error is always visible.
+
+### Fixed
+- Broadened the rsync itemize-code regex to include `t/s/p/o/g/u/a/x/n/?` so attribute-only changes (`.d..t....`, `<f..t....`) parse instead of falling through.
+- Switched pretty-print lines from `echo -e` to `printf` so file paths containing backslash escapes can't mangle output.
+- Defensive split: if two rsync itemize lines get glued into a single `read` chunk, strip the trailing entry instead of printing it as part of the previous path.
+
 ## [1.0.16] - 2026-05-22
 
 ### Fixed
