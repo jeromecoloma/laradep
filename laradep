@@ -586,6 +586,7 @@ load_config() {
   
   # Build shared SSH options array
   SSH_OPTS=(-p "$RSYNC_PORT" -i "$RSYNC_SSH_KEY")
+  SSH_OPTS+=(-o "ServerAliveInterval=30" -o "ServerAliveCountMax=10")
   [ -n "$RSYNC_SSH_CONFIG_FILE" ]   && SSH_OPTS+=(-F "$RSYNC_SSH_CONFIG_FILE")
   [ -n "$RSYNC_SSH_PROXY_JUMP" ]    && SSH_OPTS+=(-o "ProxyJump=$RSYNC_SSH_PROXY_JUMP")
   [ -n "$RSYNC_SSH_PROXY_COMMAND" ] && SSH_OPTS+=(-o "ProxyCommand=$RSYNC_SSH_PROXY_COMMAND")
@@ -597,7 +598,7 @@ load_config() {
   # Determine SSH connection target
   if [ -n "$RSYNC_SSH_HOST_ALIAS" ]; then
     # SSH config alias mode: let ~/.ssh/config handle User, Port, IdentityFile, ProxyJump, etc.
-    SSH_OPTS=()
+    SSH_OPTS=(-o "ServerAliveInterval=30" -o "ServerAliveCountMax=10")
     [ -n "$RSYNC_SSH_CONFIG_FILE" ] && SSH_OPTS+=(-F "$RSYNC_SSH_CONFIG_FILE")
     if [ -n "$RSYNC_SSH_EXTRA_OPTS" ]; then
       read -ra _ssh_extra <<< "$RSYNC_SSH_EXTRA_OPTS"
@@ -1689,40 +1690,27 @@ cmd_deploy() {
   
   eval "$rsync_cmd" 2>&1 | tr '\r' '\n' | while IFS= read -r line; do
     # Parse rsync output and make it prettier
-    if [[ "$line" =~ ^([<>ch\.fdLDS\+\*]+)\ (.+)$ ]]; then
+    if [[ "$line" =~ ^([<>ch\.fdLDS\+\*tspogauxn\?]+)\ (.+)$ ]]; then
       codes="${BASH_REMATCH[1]}"
       filepath="${BASH_REMATCH[2]}"
-      
+      # Defensive: if two rsync itemize lines got glued into one read,
+      # strip everything from the next itemize-code start onward.
+      filepath="${filepath%% [<>ch.fdLDS+*tspogauxn?][<>ch.fdLDS+*tspogauxn?]*}"
+      clean_path="${filepath#./}"
+
       # Parse the rsync codes - look at specific patterns
       if [[ "$codes" =~ ^cd ]]; then
-        # Directory creation
-        clean_path=$(echo "$filepath" | sed 's|^./||')
-        echo -e "${C5}+${CE} Creating: ${clean_path}"
-        
+        printf '%b+%b Creating: %s\n' "$C5" "$CE" "$clean_path"
       elif [[ "$codes" =~ ^\<f ]]; then
-        # File being sent/received
-        clean_path=$(echo "$filepath" | sed 's|^./||')
-        echo -e "   ${C1}•${CE} Adding: ${clean_path}"
-        
+        printf '   %b•%b Adding: %s\n' "$C1" "$CE" "$clean_path"
       elif [[ "$codes" =~ ^\.d ]]; then
-        # Directory timestamp update - skip for cleaner output
         continue
-        
       elif [[ "$codes" =~ ^\>f ]]; then
-        # File being sent
-        clean_path=$(echo "$filepath" | sed 's|^./||')
-        echo -e "   ${C2}↑${CE} Sending: ${clean_path}"
-        
+        printf '   %b↑%b Sending: %s\n' "$C2" "$CE" "$clean_path"
       elif [[ "$codes" =~ ^hf ]]; then
-        # Hard link
-        clean_path=$(echo "$filepath" | sed 's|^./||')
-        echo -e "   ${C3}↔${CE} Linking: ${clean_path}"
-        
+        printf '   %b↔%b Linking: %s\n' "$C3" "$CE" "$clean_path"
       elif [[ "$codes" =~ ^\*deleting ]]; then
-        # File deletion
-        clean_path=$(echo "$filepath" | sed 's|^./||')
-        echo -e "   ${C4}×${CE} Deleting: ${clean_path}"
-        
+        printf '   %b×%b Deleting: %s\n' "$C4" "$CE" "$clean_path"
       fi
       
     elif [[ "$line" =~ ^[[:space:]]*([0-9,]+)[[:space:]]+([0-9]+%)[[:space:]]+([0-9.]+[KMGT]?B/s)[[:space:]]+([0-9:]+)[[:space:]]+\(xfr# ]]; then
@@ -1765,9 +1753,10 @@ cmd_deploy() {
 
   # Finalize if live
   if [ "$live" -eq 1 ]; then
-    ssh "${SSH_OPTS[@]}" "$RSYNC_SSH_TARGET" bash <<ENDSSH
-      set -euo pipefail
-      trap 'echo "❌ Remote step failed at line \$LINENO (exit \$?)" >&2' ERR
+    local ssh_log="${log_file%.log}-ssh.log"
+    ssh "${SSH_OPTS[@]}" "$RSYNC_SSH_TARGET" bash <<ENDSSH 2>&1 | tee "$ssh_log"
+      set -Eeuo pipefail
+      trap 'rc=\$?; echo "❌ Remote step failed at line \$LINENO (exit \$rc)" >&2' ERR
       cd $remote_release
       mkdir -p www/bootstrap/cache
 
@@ -1810,8 +1799,9 @@ cmd_deploy() {
         eval "$RSYNC_AFTER_SCRIPT"
       fi
 ENDSSH
-    
-    if [ $? -eq 0 ]; then
+    local ssh_rc=${PIPESTATUS[0]}
+
+    if [ $ssh_rc -eq 0 ]; then
       echo "✅ Upload complete! Now serving: $selected_release"
       
       # Now purge Cloudflare cache automatically after successful deployment
@@ -1828,7 +1818,10 @@ ENDSSH
       
       return 0
     else
-      echo "❌ Upload failed."
+      echo "❌ Upload failed (ssh exit $ssh_rc)."
+      echo "── last 40 lines of remote output (${ssh_log}) ──"
+      tail -n 40 "$ssh_log" 2>/dev/null || true
+      echo "──────────────────────────────────────────────"
       return 1
     fi
   else
