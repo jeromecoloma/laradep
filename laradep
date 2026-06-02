@@ -1610,6 +1610,12 @@ cmd_deploy() {
   if [ "$use_current_release" -eq 1 ]; then
     echo "🔍 Resolving current active release on the server..."
     selected_release=$(ssh "${SSH_OPTS[@]}" "$RSYNC_SSH_TARGET" "CURRENT_LINK='$RSYNC_UPLOAD_DEST/current'; if [ -L \"\$CURRENT_LINK\" ]; then readlink \"\$CURRENT_LINK\" | xargs basename; fi")
+    local ssh_status=$?
+    if [ "$ssh_status" -ne 0 ]; then
+      echo "❌ Could not connect to the server (ssh exit code $ssh_status)."
+      echo "ℹ️  Check your network, host, port, and SSH key, then try again."
+      return 1
+    fi
     if [ -z "$selected_release" ]; then
       echo "❌ No current active release found on the server."
       echo "ℹ️  Aborting deployment. Deploy a release first or use --release=TIMESTAMP."
