@@ -2,6 +2,11 @@
 
 All notable changes to laradep are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.18] - 2026-06-02
+
+### Fixed
+- `upload --current-release` now distinguishes an SSH connection failure (timeout, refused, auth) from a genuinely missing release. On a non-zero ssh exit it reports a connection error instead of the misleading "No current active release found on the server."
+
 ## [1.0.17] - 2026-05-23
 
 ### Added
